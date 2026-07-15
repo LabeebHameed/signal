@@ -27,15 +27,15 @@ web UI (Vite + React, static)
   └─> Edge Function: api   (all requests carry the x-admin-token header)
 ```
 
-The LLM is **provider-agnostic** — configured entirely by env vars:
+The LLM is **provider-agnostic**: pick `anthropic` or `openai-compatible` in
+the Settings UI — the latter covers OpenAI, Gemini (compat endpoint), Groq,
+Mistral, OpenRouter, local Ollama, etc. via a configurable base URL.
 
-| Secret | Value |
-|---|---|
-| `LLM_PROVIDER` | `anthropic` or `openai-compatible` |
-| `LLM_MODEL` | any model id for that provider |
-| `LLM_API_KEY` | the provider's API key |
-| `LLM_BASE_URL` | (openai-compatible only) e.g. Gemini compat endpoint, Groq, Mistral, OpenRouter, local Ollama. Defaults to `https://api.openai.com/v1` |
-| `JINA_API_KEY` | optional — free key from [jina.ai](https://jina.ai/reader/); only needed if JS-rendered pages hit Jina Reader's anonymous rate limit |
+**Configuration lives in the `settings` table** and is managed entirely through
+the web UI (the table is service-role-only; the API never returns secret values,
+only `has_*` booleans). Env vars with the matching names (`LLM_API_KEY`,
+`TELEGRAM_BOT_TOKEN`, `ADMIN_TOKEN`, …) still take precedence if you prefer
+dashboard-managed secrets.
 
 ## Setup (one time)
 
@@ -51,26 +51,22 @@ The LLM is **provider-agnostic** — configured entirely by env vars:
 # from the repo root, linked to your project
 supabase db push                      # applies migrations 0001 + 0002
 
-# secrets used by the edge functions
-supabase secrets set \
-  LLM_PROVIDER=anthropic \
-  LLM_MODEL=claude-opus-4-8 \
-  LLM_API_KEY=<your key> \
-  TELEGRAM_BOT_TOKEN=<from BotFather> \
-  ADMIN_TOKEN=$(openssl rand -hex 24)   # remember this value — the UI asks for it
-
-# deploy the functions (custom auth via ADMIN_TOKEN, so no JWT verification)
+# deploy the functions (custom x-admin-token auth, so no JWT verification)
 supabase functions deploy poll-pages --no-verify-jwt
 supabase functions deploy api --no-verify-jwt
 ```
 
-The cron job (migration `0002`) reads the function URL and admin token from
-Supabase Vault. Create the two secrets once (SQL editor):
+Then two one-time SQL statements (SQL editor):
 
 ```sql
+-- the cron job reads the poller URL from Vault
 select vault.create_secret('https://<project-ref>.supabase.co/functions/v1/poll-pages', 'poll_function_url');
-select vault.create_secret('<ADMIN_TOKEN value>', 'admin_token');
+-- generate an admin token; this is what you type into the web UI
+update settings set admin_token = '<random string, e.g. openssl rand -hex 24>';
 ```
+
+Everything else (LLM provider/model/key, Telegram bot token + chat ID, optional
+Jina key) is entered in the web UI → **Settings**.
 
 ### 3. Web UI
 

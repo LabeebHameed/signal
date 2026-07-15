@@ -1,14 +1,15 @@
-// Provider-agnostic LLM extraction. The provider is chosen entirely by env:
+// Provider-agnostic LLM extraction. The provider is chosen entirely by config
+// (settings table via the UI, or env vars — see _shared/config.ts):
 //
-//   LLM_PROVIDER  "anthropic" | "openai-compatible"
-//   LLM_MODEL     any model id for that provider
-//   LLM_API_KEY   the provider's API key
-//   LLM_BASE_URL  (openai-compatible only) defaults to https://api.openai.com/v1
-//                 e.g. Gemini compat, Groq, Mistral, OpenRouter, local Ollama
+//   llmProvider  "anthropic" | "openai-compatible"
+//   llmModel     any model id for that provider
+//   llmApiKey    the provider's API key
+//   llmBaseUrl   (openai-compatible only) defaults to https://api.openai.com/v1
+//                e.g. Gemini compat, Groq, Mistral, OpenRouter, local Ollama
 //
 // No vendor SDKs — two thin fetch adapters speaking each provider's raw HTTP API.
 
-import type { ExtractedPosting } from "./types.ts";
+import type { ExtractedPosting, RuntimeConfig } from "./types.ts";
 
 const POSTINGS_SCHEMA = {
   type: "object",
@@ -52,13 +53,13 @@ interface LlmConfig {
   baseUrl: string;
 }
 
-function getConfig(): LlmConfig {
-  const provider = Deno.env.get("LLM_PROVIDER") ?? "";
-  const model = Deno.env.get("LLM_MODEL") ?? "";
-  const apiKey = Deno.env.get("LLM_API_KEY") ?? "";
-  const baseUrl = (Deno.env.get("LLM_BASE_URL") ?? "https://api.openai.com/v1").replace(/\/+$/, "");
+function getConfig(cfg: RuntimeConfig): LlmConfig {
+  const provider = cfg.llmProvider.trim();
+  const model = cfg.llmModel.trim();
+  const apiKey = cfg.llmApiKey.trim();
+  const baseUrl = (cfg.llmBaseUrl.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
   if (!provider || !model || !apiKey) {
-    throw new Error("LLM not configured: set LLM_PROVIDER, LLM_MODEL and LLM_API_KEY secrets");
+    throw new Error("LLM not configured: set provider, model and API key in Settings");
   }
   return { provider, model, apiKey, baseUrl };
 }
@@ -153,8 +154,12 @@ async function callOpenAiCompatible(cfg: LlmConfig, pageUrl: string, content: st
 }
 
 /** Extract job postings from page content using the configured LLM provider. */
-export async function extractPostings(pageContent: string, pageUrl: string): Promise<ExtractedPosting[]> {
-  const cfg = getConfig();
+export async function extractPostings(
+  pageContent: string,
+  pageUrl: string,
+  runtime: RuntimeConfig,
+): Promise<ExtractedPosting[]> {
+  const cfg = getConfig(runtime);
   let text: string;
   if (cfg.provider === "anthropic") {
     text = await callAnthropic(cfg, pageUrl, pageContent);

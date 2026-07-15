@@ -26,6 +26,24 @@ export interface Posting {
 export interface Settings {
   job_description: string;
   telegram_chat_id: string;
+  llm_provider: string;
+  llm_model: string;
+  llm_base_url: string;
+  has_llm_api_key: boolean;
+  has_telegram_bot_token: boolean;
+  has_jina_api_key: boolean;
+}
+
+/** PUT payload: secret fields are only applied when sent non-empty. */
+export interface SettingsUpdate {
+  job_description?: string;
+  telegram_chat_id?: string;
+  llm_provider?: string;
+  llm_model?: string;
+  llm_base_url?: string;
+  llm_api_key?: string;
+  telegram_bot_token?: string;
+  jina_api_key?: string;
 }
 
 export function getToken(): string {
@@ -60,8 +78,8 @@ export const api = {
     request<WatchedPage>(`/pages/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deletePage: (id: string) => request<{ ok: boolean }>(`/pages/${id}`, { method: "DELETE" }),
   getSettings: () => request<Settings>("/settings"),
-  saveSettings: (settings: Settings) =>
-    request<Settings>("/settings", { method: "PUT", body: JSON.stringify(settings) }),
+  saveSettings: (update: SettingsUpdate) =>
+    request<Settings>("/settings", { method: "PUT", body: JSON.stringify(update) }),
   listPostings: () => request<Posting[]>("/postings?limit=50"),
   poll: () => request<{ pages: number; results: unknown[] }>("/poll", { method: "POST" }),
 };

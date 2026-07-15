@@ -32,11 +32,21 @@ create table public.postings (
 
 create index postings_first_seen_idx on public.postings (first_seen_at desc);
 
--- Single-row settings table (MVP is single-user)
+-- Single-row settings table (MVP is single-user). Also holds runtime config:
+-- secrets are entered through the web UI and only ever read by edge functions
+-- via the service-role key (RLS has no public policies). Env vars with the
+-- same names, if set on the functions, take precedence over these columns.
 create table public.settings (
   id integer primary key default 1 check (id = 1),
   job_description text not null default '',
-  telegram_chat_id text not null default ''
+  telegram_chat_id text not null default '',
+  admin_token text not null default '',
+  llm_provider text not null default '',        -- 'anthropic' | 'openai-compatible'
+  llm_model text not null default '',
+  llm_api_key text not null default '',
+  llm_base_url text not null default '',
+  telegram_bot_token text not null default '',
+  jina_api_key text not null default ''
 );
 
 insert into public.settings (id) values (1);

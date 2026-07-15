@@ -129,6 +129,8 @@ function PagesSection({ pages, refresh }: { pages: WatchedPage[]; refresh: () =>
 
 function SettingsSection() {
   const [settings, setSettings] = useState<Settings | null>(null);
+  // Secret inputs are write-only: the server never echoes stored values back.
+  const [secrets, setSecrets] = useState({ llm_api_key: "", telegram_bot_token: "", jina_api_key: "" });
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
 
@@ -136,8 +138,10 @@ function SettingsSection() {
     api.getSettings().then(setSettings).catch((e) => setError(e.message));
   }, []);
 
-  if (error) return <section><h2>Settings</h2><p className="error">{error}</p></section>;
+  if (error && !settings) return <section><h2>Settings</h2><p className="error">{error}</p></section>;
   if (!settings) return <section><h2>Settings</h2><p>Loading…</p></section>;
+
+  const secretPlaceholder = (isSet: boolean) => (isSet ? "•••••• (set — leave blank to keep)" : "not set");
 
   return (
     <section>
@@ -147,7 +151,18 @@ function SettingsSection() {
           e.preventDefault();
           setError("");
           try {
-            await api.saveSettings(settings);
+            const updated = await api.saveSettings({
+              job_description: settings.job_description,
+              telegram_chat_id: settings.telegram_chat_id,
+              llm_provider: settings.llm_provider,
+              llm_model: settings.llm_model,
+              llm_base_url: settings.llm_base_url,
+              ...(secrets.llm_api_key.trim() ? { llm_api_key: secrets.llm_api_key.trim() } : {}),
+              ...(secrets.telegram_bot_token.trim() ? { telegram_bot_token: secrets.telegram_bot_token.trim() } : {}),
+              ...(secrets.jina_api_key.trim() ? { jina_api_key: secrets.jina_api_key.trim() } : {}),
+            });
+            setSettings(updated);
+            setSecrets({ llm_api_key: "", telegram_bot_token: "", jina_api_key: "" });
             setSaved(true);
             setTimeout(() => setSaved(false), 2000);
           } catch (err) {
@@ -164,14 +179,80 @@ function SettingsSection() {
             placeholder="e.g. Senior frontend engineer, React, remote or Bangalore"
           />
         </label>
+
+        <h3>LLM (extracts postings from pages)</h3>
+        <div className="grid-2">
+          <label>
+            Provider
+            <select
+              value={settings.llm_provider}
+              onChange={(e) => setSettings({ ...settings, llm_provider: e.target.value })}
+            >
+              <option value="">— choose —</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="openai-compatible">OpenAI-compatible (OpenAI, Gemini, Groq, OpenRouter, Ollama…)</option>
+            </select>
+          </label>
+          <label>
+            Model
+            <input
+              value={settings.llm_model}
+              onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
+              placeholder="model id"
+            />
+          </label>
+        </div>
+        {settings.llm_provider === "openai-compatible" && (
+          <label>
+            Base URL <span className="hint">(leave blank for OpenAI; set for Gemini/Groq/OpenRouter/Ollama…)</span>
+            <input
+              value={settings.llm_base_url}
+              onChange={(e) => setSettings({ ...settings, llm_base_url: e.target.value })}
+              placeholder="https://api.openai.com/v1"
+            />
+          </label>
+        )}
         <label>
-          Telegram chat ID <span className="hint">(message @userinfobot on Telegram to get yours)</span>
+          LLM API key
           <input
-            value={settings.telegram_chat_id}
-            onChange={(e) => setSettings({ ...settings, telegram_chat_id: e.target.value })}
-            placeholder="123456789"
+            type="password"
+            value={secrets.llm_api_key}
+            onChange={(e) => setSecrets({ ...secrets, llm_api_key: e.target.value })}
+            placeholder={secretPlaceholder(settings.has_llm_api_key)}
           />
         </label>
+
+        <h3>Telegram (receives the notifications)</h3>
+        <div className="grid-2">
+          <label>
+            Bot token <span className="hint">(from @BotFather)</span>
+            <input
+              type="password"
+              value={secrets.telegram_bot_token}
+              onChange={(e) => setSecrets({ ...secrets, telegram_bot_token: e.target.value })}
+              placeholder={secretPlaceholder(settings.has_telegram_bot_token)}
+            />
+          </label>
+          <label>
+            Chat ID <span className="hint">(message @userinfobot to get yours)</span>
+            <input
+              value={settings.telegram_chat_id}
+              onChange={(e) => setSettings({ ...settings, telegram_chat_id: e.target.value })}
+              placeholder="123456789"
+            />
+          </label>
+        </div>
+
+        <label>
+          Jina Reader API key <span className="hint">(optional — only for JS-heavy pages hitting rate limits; free at jina.ai)</span>
+          <input
+            type="password"
+            value={secrets.jina_api_key}
+            onChange={(e) => setSecrets({ ...secrets, jina_api_key: e.target.value })}
+            placeholder={secretPlaceholder(settings.has_jina_api_key)}
+          />
+        </label>
+
         <button type="submit">Save settings</button>
         {saved && <span className="saved">Saved ✓</span>}
         {error && <p className="error">{error}</p>}

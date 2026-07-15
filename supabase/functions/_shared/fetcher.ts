@@ -58,12 +58,11 @@ export async function fetchDirect(url: string): Promise<FetchResult> {
   return { ...cap(text), source: "direct" };
 }
 
-export async function fetchViaJina(url: string): Promise<FetchResult> {
+export async function fetchViaJina(url: string, jinaApiKey = ""): Promise<FetchResult> {
   // Anonymous access works but is rate-limited per IP; an optional free key
   // from jina.ai raises the limits considerably.
   const headers: Record<string, string> = { "Accept": "text/plain" };
-  const jinaKey = Deno.env.get("JINA_API_KEY");
-  if (jinaKey) headers["Authorization"] = `Bearer ${jinaKey}`;
+  if (jinaApiKey) headers["Authorization"] = `Bearer ${jinaApiKey}`;
   const res = await fetchWithTimeout(`https://r.jina.ai/${url}`, headers, 45_000);
   if (res.status === 401 || res.status === 429) {
     throw new Error(
@@ -87,11 +86,12 @@ export function looksLikeShell(content: string): boolean {
 export async function fetchPageContent(
   url: string,
   preferredSource: "direct" | "jina",
+  jinaApiKey = "",
 ): Promise<FetchResult> {
-  if (preferredSource === "jina") return await fetchViaJina(url);
+  if (preferredSource === "jina") return await fetchViaJina(url, jinaApiKey);
   const direct = await fetchDirect(url);
   if (!looksLikeShell(direct.content)) return direct;
-  return await fetchViaJina(url);
+  return await fetchViaJina(url, jinaApiKey);
 }
 
 export async function sha256(text: string): Promise<string> {

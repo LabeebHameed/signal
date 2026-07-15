@@ -35,6 +35,7 @@ The LLM is **provider-agnostic** — configured entirely by env vars:
 | `LLM_MODEL` | any model id for that provider |
 | `LLM_API_KEY` | the provider's API key |
 | `LLM_BASE_URL` | (openai-compatible only) e.g. Gemini compat endpoint, Groq, Mistral, OpenRouter, local Ollama. Defaults to `https://api.openai.com/v1` |
+| `JINA_API_KEY` | optional — free key from [jina.ai](https://jina.ai/reader/); only needed if JS-rendered pages hit Jina Reader's anonymous rate limit |
 
 ## Setup (one time)
 

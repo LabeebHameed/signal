@@ -59,7 +59,17 @@ export async function fetchDirect(url: string): Promise<FetchResult> {
 }
 
 export async function fetchViaJina(url: string): Promise<FetchResult> {
-  const res = await fetchWithTimeout(`https://r.jina.ai/${url}`, { "Accept": "text/plain" }, 45_000);
+  // Anonymous access works but is rate-limited per IP; an optional free key
+  // from jina.ai raises the limits considerably.
+  const headers: Record<string, string> = { "Accept": "text/plain" };
+  const jinaKey = Deno.env.get("JINA_API_KEY");
+  if (jinaKey) headers["Authorization"] = `Bearer ${jinaKey}`;
+  const res = await fetchWithTimeout(`https://r.jina.ai/${url}`, headers, 45_000);
+  if (res.status === 401 || res.status === 429) {
+    throw new Error(
+      `jina fetch rate-limited/unauthorized (HTTP ${res.status}) — set the JINA_API_KEY secret (free key at jina.ai) to raise limits`,
+    );
+  }
   if (!res.ok) throw new Error(`jina fetch failed: HTTP ${res.status}`);
   const text = (await res.text()).trim();
   return { ...cap(text), source: "jina" };

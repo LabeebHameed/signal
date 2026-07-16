@@ -100,6 +100,20 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 2. **Settings** — your job description (for future filters) and Telegram chat ID.
 3. **Check now** — trigger a poll immediately instead of waiting for cron.
 
+## Troubleshooting
+
+- **Telegram "chat not found"**: the bot can't see your chat. The chat ID must
+  be the **numeric** ID from @userinfobot (not a @username), and you must open
+  your bot's chat and press **Start** first (bots can't message you until you
+  do). Use **Send test message** in Settings to verify instantly. Failed
+  notifications aren't lost — they queue (`pending` in the postings list) and
+  retry on the next poll once Telegram works.
+- **"direct fetch failed: HTTP 403" / connection errors**: the site blocks
+  datacenter traffic (anti-bot). The poller automatically retries through Jina
+  Reader, but anonymous Jina access is heavily rate-limited — set the **Jina
+  Reader API key** in Settings (free at [jina.ai](https://jina.ai)) and these
+  sites will work.
+
 ## Behavior notes
 
 - **First crawl of a page is a baseline**: postings are recorded but not

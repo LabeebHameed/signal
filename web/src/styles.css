@@ -96,6 +96,11 @@ h3 { font-size: 0.95rem; margin: 1.25rem 0 0.5rem; color: var(--muted); }
 .saved { margin-left: 0.75rem; color: #16a34a; }
 .result-summary { color: #16a34a; font-size: 0.85rem; margin: 0.5rem 0; }
 .pages-add-form textarea { margin-bottom: 0.5rem; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--fg); }
+.load-more { text-align: center; margin: 0.75rem 0; }
+.tg-test { font-size: 0.85rem; margin: 0 0 0.75rem; }
+.tg-test .secondary { margin-right: 0.5rem; margin-left: 0; }
 .error { color: var(--danger); font-size: 0.85rem; }
 .empty { color: var(--muted); text-align: center; padding: 1.5rem 0; }
 

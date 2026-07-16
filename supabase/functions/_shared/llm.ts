@@ -23,6 +23,8 @@ const POSTINGS_SCHEMA = {
           url: { type: "string" },
           company: { type: "string" },
           location: { type: "string" },
+          posted_at: { type: "string" },
+          posted_text: { type: "string" },
         },
         required: ["title"],
         additionalProperties: false,
@@ -40,10 +42,12 @@ Return every individual job posting visible in the content. For each posting inc
 - url: the posting's link if one appears near it (may be relative)
 - company: the hiring company if identifiable
 - location: the location(s) shown for the posting, verbatim
+- posted_text: if the page shows when the job was posted (e.g. "2 days ago", "Posted Mar 3", "3h"), that text verbatim
+- posted_at: the same posted date as an ISO date (YYYY-MM-DD), computed from today's date when the page shows a relative time. Omit if the page shows no posted date — never guess.
 
 Do NOT filter, judge, or deduplicate beyond obvious exact repeats. Do NOT invent postings or fields that are not in the content. Navigation links, department headers, and generic buttons are not postings.
 
-Respond with JSON only, matching: {"postings": [{"title": "...", "url": "...", "company": "...", "location": "..."}]}
+Respond with JSON only, matching: {"postings": [{"title": "...", "url": "...", "company": "...", "location": "...", "posted_at": "...", "posted_text": "..."}]}
 If the content contains no job postings, respond with {"postings": []}.`;
 
 interface LlmConfig {
@@ -65,7 +69,8 @@ function getConfig(cfg: RuntimeConfig): LlmConfig {
 }
 
 function userPrompt(pageUrl: string, content: string): string {
-  return `Page URL: ${pageUrl}\n\nPage content:\n${content}`;
+  const today = new Date().toISOString().slice(0, 10);
+  return `Today's date: ${today}\nPage URL: ${pageUrl}\n\nPage content:\n${content}`;
 }
 
 /** Strip markdown fences some models wrap around JSON, then parse. */
@@ -83,11 +88,16 @@ function validatePostings(parsed: unknown): ExtractedPosting[] {
     if (typeof item !== "object" || item === null) continue;
     const p = item as Record<string, unknown>;
     if (typeof p.title !== "string" || p.title.trim() === "") continue;
+    const postedAt = typeof p.posted_at === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.posted_at.trim())
+      ? p.posted_at.trim()
+      : undefined;
     out.push({
       title: p.title.trim(),
       url: typeof p.url === "string" && p.url.trim() !== "" ? p.url.trim() : undefined,
       company: typeof p.company === "string" && p.company.trim() !== "" ? p.company.trim() : undefined,
       location: typeof p.location === "string" && p.location.trim() !== "" ? p.location.trim() : undefined,
+      posted_at: postedAt,
+      posted_text: typeof p.posted_text === "string" && p.posted_text.trim() !== "" ? p.posted_text.trim() : undefined,
     });
   }
   return out;

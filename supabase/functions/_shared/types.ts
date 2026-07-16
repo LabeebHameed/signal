@@ -3,6 +3,10 @@ export interface ExtractedPosting {
   url?: string;
   company?: string;
   location?: string;
+  /** ISO date (YYYY-MM-DD) the job was posted, when the page shows one. */
+  posted_at?: string;
+  /** The posted-date text verbatim as shown on the page, e.g. "2 days ago". */
+  posted_text?: string;
 }
 
 export interface WatchedPage {

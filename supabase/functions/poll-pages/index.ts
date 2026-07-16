@@ -40,6 +40,47 @@ function dedupeKeyFor(posting: ExtractedPosting, pageUrl: string): { key: string
   return { key: `t:${posting.title.toLowerCase()}|c:${(posting.company ?? "").toLowerCase()}`, absoluteUrl };
 }
 
+/**
+ * Send Telegram messages for this page's queued (pending_notify) postings.
+ * A send failure stops the loop and is returned as an error string — the
+ * remaining rows stay queued and retry on the next poll run, and the failure
+ * never aborts the page's crawl-state bookkeeping.
+ */
+async function notifyPending(
+  db: SupabaseClient,
+  page: WatchedPage,
+  cfg: RuntimeConfig,
+  result: PageResult,
+): Promise<string | null> {
+  if (!cfg.telegramBotToken || !cfg.telegramChatId) return null; // not configured — rows stay queued
+  const { data: pending, error } = await db
+    .from("postings")
+    .select("id, title, url, company, location")
+    .eq("page_id", page.id)
+    .eq("pending_notify", true)
+    .order("first_seen_at")
+    .limit(MAX_NOTIFICATIONS_PER_PAGE_RUN);
+  if (error) return `load pending notifications failed: ${error.message}`;
+  for (const row of pending ?? []) {
+    try {
+      await sendTelegramMessage(
+        cfg.telegramBotToken,
+        cfg.telegramChatId,
+        formatPostingMessage(row, page.label || page.url),
+      );
+    } catch (e) {
+      // Telegram is misconfigured or down — don't hammer it for every row.
+      return e instanceof Error ? e.message : String(e);
+    }
+    await db.from("postings").update({
+      notified_at: new Date().toISOString(),
+      pending_notify: false,
+    }).eq("id", row.id);
+    result.notified++;
+  }
+  return null;
+}
+
 async function pollPage(
   db: SupabaseClient,
   page: WatchedPage,
@@ -50,15 +91,18 @@ async function pollPage(
   // 1. Fetch (preferring whichever source worked before)
   let fetched = await fetchPageContent(page.url, page.fetch_source, cfg.jinaApiKey);
 
-  // 2. Hash short-circuit: nothing changed → no LLM call
+  // 2. Hash short-circuit: nothing changed → no LLM call. Still flush any
+  // notifications left queued by an earlier failed Telegram send.
   let hash = await sha256(fetched.content);
   if (hash === page.last_content_hash) {
+    const notifyError = await notifyPending(db, page, cfg, result);
     await db.from("watched_pages").update({
       last_checked_at: new Date().toISOString(),
-      last_error: null,
+      last_error: notifyError,
       failure_count: 0,
     }).eq("id", page.id);
     result.status = "unchanged";
+    if (notifyError) result.error = notifyError;
     return result;
   }
 
@@ -78,7 +122,8 @@ async function pollPage(
   }
 
   // 4. Diff by dedupe key — the unique(page_id, dedupe_key) constraint plus
-  // ignoreDuplicates makes this return only genuinely-new rows.
+  // ignoreDuplicates makes this return only genuinely-new rows. New rows on a
+  // non-baseline crawl are queued for notification (pending_notify).
   const seen = new Set<string>();
   const rows = [];
   for (const p of postings) {
@@ -92,52 +137,38 @@ async function pollPage(
       url: absoluteUrl,
       company: p.company ?? null,
       location: p.location ?? null,
+      posted_at: p.posted_at ?? null,
+      posted_text: p.posted_text ?? null,
+      pending_notify: page.first_crawl_done,
       raw: p,
     });
   }
 
-  let newRows: Array<{ id: string; title: string; url: string | null; company: string | null; location: string | null }> = [];
   if (rows.length > 0) {
     const { data, error } = await db
       .from("postings")
       .upsert(rows, { onConflict: "page_id,dedupe_key", ignoreDuplicates: true })
-      .select("id, title, url, company, location");
+      .select("id");
     if (error) throw new Error(`insert postings failed: ${error.message}`);
-    newRows = data ?? [];
-  }
-  result.newPostings = newRows.length;
-
-  // 5. Notify — except on the first-ever crawl of a page (baseline snapshot)
-  if (page.first_crawl_done && newRows.length > 0 && cfg.telegramBotToken && cfg.telegramChatId) {
-    const toNotify = newRows.slice(0, MAX_NOTIFICATIONS_PER_PAGE_RUN);
-    for (const row of toNotify) {
-      await sendTelegramMessage(
-        cfg.telegramBotToken,
-        cfg.telegramChatId,
-        formatPostingMessage(row, page.label || page.url),
-      );
-      await db.from("postings").update({ notified_at: new Date().toISOString() }).eq("id", row.id);
-      result.notified++;
-    }
-    if (newRows.length > toNotify.length) {
-      await sendTelegramMessage(
-        cfg.telegramBotToken,
-        cfg.telegramChatId,
-        `…and ${newRows.length - toNotify.length} more new postings on ${page.label || page.url}`,
-      );
-    }
+    result.newPostings = (data ?? []).length;
   }
 
-  // 6. Persist page state
+  // 5. Notify queued postings (this run's new ones plus any earlier failures).
+  // Baseline crawls queue nothing, so this is a no-op there.
+  const notifyError = await notifyPending(db, page, cfg, result);
+
+  // 6. Persist page state — always, even when Telegram failed.
+  const truncatedNote = fetched.truncated ? "content truncated to 100k chars before extraction" : null;
   await db.from("watched_pages").update({
     last_content_hash: hash,
     last_checked_at: new Date().toISOString(),
-    last_error: fetched.truncated ? "content truncated to 100k chars before extraction" : null,
+    last_error: notifyError ?? truncatedNote,
     failure_count: 0,
     first_crawl_done: true,
     fetch_source: fetched.source,
   }).eq("id", page.id);
 
+  if (notifyError) result.error = notifyError;
   return result;
 }
 

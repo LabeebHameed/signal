@@ -18,9 +18,19 @@ export interface Posting {
   url: string | null;
   company: string | null;
   location: string | null;
+  posted_at: string | null;
+  posted_text: string | null;
   first_seen_at: string;
   notified_at: string | null;
+  pending_notify: boolean;
   watched_pages: { label: string; url: string } | null;
+}
+
+export type PostingSort = "first_seen_at" | "posted_at" | "title" | "company";
+
+export interface PostingsPage {
+  items: Posting[];
+  total: number;
 }
 
 export interface Settings {
@@ -87,6 +97,15 @@ export const api = {
   getSettings: () => request<Settings>("/settings"),
   saveSettings: (update: SettingsUpdate) =>
     request<Settings>("/settings", { method: "PUT", body: JSON.stringify(update) }),
-  listPostings: () => request<Posting[]>("/postings?limit=50"),
+  listPostings: (opts: { limit?: number; offset?: number; sort?: PostingSort; order?: "asc" | "desc" } = {}) => {
+    const params = new URLSearchParams({
+      limit: String(opts.limit ?? 50),
+      offset: String(opts.offset ?? 0),
+      sort: opts.sort ?? "first_seen_at",
+      order: opts.order ?? "desc",
+    });
+    return request<PostingsPage>(`/postings?${params}`);
+  },
   poll: () => request<{ pages: number; results: unknown[] }>("/poll", { method: "POST" }),
+  testTelegram: () => request<{ ok: boolean }>("/telegram-test", { method: "POST" }),
 };

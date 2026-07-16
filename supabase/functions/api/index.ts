@@ -12,14 +12,19 @@
 //   GET    /settings              read settings (secrets masked to has_* booleans)
 //   PUT    /settings              update settings; secret fields only change
 //                                 when sent as non-empty strings
-//   GET    /postings              recent postings (?limit=50)
+//   GET    /postings              postings with sort + pagination:
+//                                 ?limit=50&offset=0&sort=first_seen_at|posted_at|title|company
+//                                 &order=asc|desc  → { items, total }
 //   POST   /poll                  trigger a synchronous poll run, returns summary
+//   POST   /telegram-test         send a test message to the configured chat and
+//                                 return Telegram's exact response (for debugging)
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import type { Settings } from "../_shared/types.ts";
 import { resolveConfig } from "../_shared/config.ts";
 import { deriveLabel } from "../_shared/label.ts";
+import { sendTelegramMessage } from "../_shared/telegram.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -75,7 +80,13 @@ Deno.serve(async (req: Request) => {
 
   try {
     if (resource === "pages" && !resourceId && req.method === "GET") {
-      const { data, error } = await db.from("watched_pages").select("*").order("created_at");
+      // url as a tiebreaker: bulk-added rows share one created_at, and without
+      // a deterministic tiebreaker the list reshuffles on every fetch.
+      const { data, error } = await db
+        .from("watched_pages")
+        .select("*")
+        .order("created_at")
+        .order("url");
       if (error) throw error;
       return json(data);
     }
@@ -188,14 +199,38 @@ Deno.serve(async (req: Request) => {
     }
 
     if (resource === "postings" && req.method === "GET") {
-      const limit = Math.min(Number(new URL(req.url).searchParams.get("limit")) || 50, 200);
-      const { data, error } = await db
+      const params = new URL(req.url).searchParams;
+      const limit = Math.min(Number(params.get("limit")) || 50, 200);
+      const offset = Math.max(Number(params.get("offset")) || 0, 0);
+      const sortable = ["first_seen_at", "posted_at", "title", "company"];
+      const sort = sortable.includes(params.get("sort") ?? "") ? params.get("sort")! : "first_seen_at";
+      const ascending = params.get("order") === "asc";
+      const { data, error, count } = await db
         .from("postings")
-        .select("id, title, url, company, location, first_seen_at, notified_at, watched_pages(label, url)")
-        .order("first_seen_at", { ascending: false })
-        .limit(limit);
+        .select(
+          "id, title, url, company, location, posted_at, posted_text, first_seen_at, notified_at, pending_notify, watched_pages(label, url)",
+          { count: "exact" },
+        )
+        .order(sort, { ascending, nullsFirst: false })
+        .order("id") // deterministic tiebreaker so pages don't overlap
+        .range(offset, offset + limit - 1);
       if (error) throw error;
-      return json(data);
+      return json({ items: data, total: count ?? 0 });
+    }
+
+    if (resource === "telegram-test" && req.method === "POST") {
+      if (!cfg.telegramBotToken) return json({ error: "no Telegram bot token set in Settings" }, 400);
+      if (!cfg.telegramChatId) return json({ error: "no Telegram chat ID set in Settings" }, 400);
+      try {
+        await sendTelegramMessage(
+          cfg.telegramBotToken,
+          cfg.telegramChatId,
+          "✅ Test message from Signal — your Telegram notifications are working.",
+        );
+        return json({ ok: true });
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+      }
     }
 
     if (resource === "poll" && req.method === "POST") {

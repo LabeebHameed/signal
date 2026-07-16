@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, getToken, setToken, BulkAddResult, Posting, Settings, WatchedPage } from "./api";
+import { api, getToken, setToken, BulkAddResult, Posting, PostingSort, Settings, WatchedPage } from "./api";
 
 function timeAgo(iso: string | null): string {
   if (!iso) return "never";
@@ -145,6 +145,17 @@ function SettingsSection() {
   const [secrets, setSecrets] = useState({ llm_api_key: "", telegram_bot_token: "", jina_api_key: "" });
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [tgTest, setTgTest] = useState<{ status: "idle" | "sending" | "ok" | "fail"; message?: string }>({ status: "idle" });
+
+  const testTelegram = async () => {
+    setTgTest({ status: "sending" });
+    try {
+      await api.testTelegram();
+      setTgTest({ status: "ok" });
+    } catch (e) {
+      setTgTest({ status: "fail", message: e instanceof Error ? e.message : String(e) });
+    }
+  };
 
   useEffect(() => {
     api.getSettings().then(setSettings).catch((e) => setError(e.message));
@@ -246,7 +257,7 @@ function SettingsSection() {
             />
           </label>
           <label>
-            Chat ID <span className="hint">(message @userinfobot to get yours)</span>
+            Chat ID <span className="hint">(the numeric ID from @userinfobot — not a @username)</span>
             <input
               value={settings.telegram_chat_id}
               onChange={(e) => setSettings({ ...settings, telegram_chat_id: e.target.value })}
@@ -254,6 +265,14 @@ function SettingsSection() {
             />
           </label>
         </div>
+        <p className="tg-test">
+          <button type="button" className="secondary" disabled={tgTest.status === "sending"} onClick={testTelegram}>
+            {tgTest.status === "sending" ? "Sending…" : "Send test message"}
+          </button>
+          {tgTest.status === "ok" && <span className="saved">Sent ✓ — check your Telegram</span>}
+          {tgTest.status === "fail" && <span className="error"> {tgTest.message}</span>}
+          <span className="hint"> Save settings first. "chat not found" means the chat ID is wrong or you haven't pressed Start in your bot's chat.</span>
+        </p>
 
         <label>
           Jina Reader API key <span className="hint">(optional — only for JS-heavy pages hitting rate limits; free at jina.ai)</span>
@@ -273,39 +292,91 @@ function SettingsSection() {
   );
 }
 
-function PostingsSection({ postings }: { postings: Posting[] }) {
+const PAGE_SIZE = 50;
+
+function PostingsSection({ refreshSignal }: { refreshSignal: number }) {
+  const [items, setItems] = useState<Posting[]>([]);
+  const [total, setTotal] = useState(0);
+  const [sort, setSort] = useState<PostingSort>("first_seen_at");
+  const [order, setOrder] = useState<"asc" | "desc">("desc");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async (offset: number, append: boolean) => {
+    setLoading(true);
+    setError("");
+    try {
+      const page = await api.listPostings({ limit: PAGE_SIZE, offset, sort, order });
+      setItems((prev) => (append ? [...prev, ...page.items] : page.items));
+      setTotal(page.total);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [sort, order]);
+
+  // Reload from the top whenever sorting changes or the app refreshes.
+  useEffect(() => {
+    load(0, false);
+  }, [load, refreshSignal]);
+
+  const sortBy = (field: PostingSort) => {
+    if (sort === field) {
+      setOrder(order === "desc" ? "asc" : "desc");
+    } else {
+      setSort(field);
+      setOrder(field === "title" || field === "company" ? "asc" : "desc");
+    }
+  };
+
+  const arrow = (field: PostingSort) => (sort === field ? (order === "desc" ? " ↓" : " ↑") : "");
+
+  const notifiedCell = (p: Posting) =>
+    p.notified_at ? "✓" : p.pending_notify ? "pending" : "baseline";
+
   return (
     <section>
-      <h2>Recent postings</h2>
+      <h2>Postings <span className="hint">({items.length} of {total})</span></h2>
       <table>
         <thead>
           <tr>
-            <th>Title</th>
-            <th>Company</th>
+            <th className="sortable" onClick={() => sortBy("title")}>Title{arrow("title")}</th>
+            <th className="sortable" onClick={() => sortBy("company")}>Company{arrow("company")}</th>
             <th>Location</th>
             <th>Source</th>
-            <th>Seen</th>
+            <th className="sortable" onClick={() => sortBy("posted_at")}>Posted{arrow("posted_at")}</th>
+            <th className="sortable" onClick={() => sortBy("first_seen_at")}>Seen{arrow("first_seen_at")}</th>
             <th>Notified</th>
           </tr>
         </thead>
         <tbody>
-          {postings.map((p) => (
+          {items.map((p) => (
             <tr key={p.id}>
               <td>{p.url ? <a href={p.url} target="_blank" rel="noreferrer">{p.title}</a> : p.title}</td>
               <td>{p.company ?? "—"}</td>
               <td>{p.location ?? "—"}</td>
               <td>{p.watched_pages?.label || p.watched_pages?.url || "—"}</td>
+              <td>{p.posted_text || p.posted_at || "—"}</td>
               <td>{timeAgo(p.first_seen_at)}</td>
-              <td>{p.notified_at ? "✓" : "baseline"}</td>
+              <td>{notifiedCell(p)}</td>
             </tr>
           ))}
-          {postings.length === 0 && (
+          {items.length === 0 && !loading && (
             <tr>
-              <td colSpan={6} className="empty">Nothing extracted yet.</td>
+              <td colSpan={7} className="empty">Nothing extracted yet.</td>
             </tr>
           )}
         </tbody>
       </table>
+      {error && <p className="error">{error}</p>}
+      {items.length < total && (
+        <p className="load-more">
+          <button className="secondary" disabled={loading} onClick={() => load(items.length, true)}>
+            {loading ? "Loading…" : `Load more (${total - items.length} remaining)`}
+          </button>
+        </p>
+      )}
     </section>
   );
 }
@@ -313,13 +384,13 @@ function PostingsSection({ postings }: { postings: Posting[] }) {
 export default function App() {
   const [hasToken, setHasToken] = useState(Boolean(getToken()));
   const [pages, setPages] = useState<WatchedPage[]>([]);
-  const [postings, setPostings] = useState<Posting[]>([]);
+  const [refreshSignal, setRefreshSignal] = useState(0);
   const [polling, setPolling] = useState(false);
   const [loadError, setLoadError] = useState("");
 
   const refresh = useCallback(() => {
     api.listPages().then(setPages).catch((e) => setLoadError(e.message));
-    api.listPostings().then(setPostings).catch(() => {});
+    setRefreshSignal((n) => n + 1); // tells PostingsSection to reload
   }, []);
 
   useEffect(() => {
@@ -367,7 +438,7 @@ export default function App() {
       )}
       <PagesSection pages={pages} refresh={refresh} />
       <SettingsSection />
-      <PostingsSection postings={postings} />
+      <PostingsSection refreshSignal={refreshSignal} />
     </main>
   );
 }

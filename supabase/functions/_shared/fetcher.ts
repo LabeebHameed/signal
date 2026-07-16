@@ -80,18 +80,41 @@ export function looksLikeShell(content: string): boolean {
 }
 
 /**
- * Fetch page content, preferring the source that worked last time.
- * Falls back from direct → jina when the page looks like a JS shell.
+ * Fetch page content, preferring the source that worked last time, and falling
+ * back to the other source when the preferred one fails or returns an empty
+ * JS shell. Anti-bot walls (403s, connection resets) on direct fetches are the
+ * common case this covers — Jina Reader's rendering infra often gets through.
  */
 export async function fetchPageContent(
   url: string,
   preferredSource: "direct" | "jina",
   jinaApiKey = "",
 ): Promise<FetchResult> {
-  if (preferredSource === "jina") return await fetchViaJina(url, jinaApiKey);
-  const direct = await fetchDirect(url);
-  if (!looksLikeShell(direct.content)) return direct;
-  return await fetchViaJina(url, jinaApiKey);
+  const attempt = (source: "direct" | "jina") =>
+    source === "jina" ? fetchViaJina(url, jinaApiKey) : fetchDirect(url);
+  const order: Array<"direct" | "jina"> =
+    preferredSource === "jina" ? ["jina", "direct"] : ["direct", "jina"];
+
+  const errors: string[] = [];
+  let bestShell: FetchResult | null = null;
+  for (const source of order) {
+    try {
+      const result = await attempt(source);
+      // A tiny body is usually an empty JS shell (or a block page) — try the
+      // other source before settling for it.
+      if (looksLikeShell(result.content)) {
+        if (!bestShell || result.content.length > bestShell.content.length) bestShell = result;
+        continue;
+      }
+      return result;
+    } catch (e) {
+      errors.push(`${source}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  // Neither source produced substantial content. A tiny-but-successful fetch
+  // is still valid — some boards are legitimately near-empty ("No open roles").
+  if (bestShell) return bestShell;
+  throw new Error(errors.join(" | "));
 }
 
 export async function sha256(text: string): Promise<string> {

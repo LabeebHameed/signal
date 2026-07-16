@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, getToken, setToken, Posting, Settings, WatchedPage } from "./api";
+import { api, getToken, setToken, BulkAddResult, Posting, Settings, WatchedPage } from "./api";
 
 function timeAgo(iso: string | null): string {
   if (!iso) return "never";
@@ -38,17 +38,20 @@ function TokenGate({ onReady }: { onReady: () => void }) {
 }
 
 function PagesSection({ pages, refresh }: { pages: WatchedPage[]; refresh: () => void }) {
-  const [url, setUrl] = useState("");
-  const [label, setLabel] = useState("");
+  const [bulkText, setBulkText] = useState("");
   const [error, setError] = useState("");
+  const [result, setResult] = useState<BulkAddResult | null>(null);
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setResult(null);
+    const urls = bulkText.split("\n").map((line) => line.trim()).filter(Boolean);
+    if (urls.length === 0) return;
     try {
-      await api.addPage(url.trim(), label.trim());
-      setUrl("");
-      setLabel("");
+      const res = await api.addPages(urls);
+      setResult(res);
+      setBulkText("");
       refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -58,16 +61,25 @@ function PagesSection({ pages, refresh }: { pages: WatchedPage[]; refresh: () =>
   return (
     <section>
       <h2>Watched pages</h2>
-      <form className="row" onSubmit={add}>
-        <input
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://company.com/careers"
-          required
+      <form className="pages-add-form" onSubmit={add}>
+        <textarea
+          value={bulkText}
+          onChange={(e) => setBulkText(e.target.value)}
+          placeholder={"Paste one or more career page URLs, one per line:\nhttps://dribbble.com/jobs\nhttps://jobs.lever.co/plaid"}
+          rows={3}
         />
-        <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="label (optional)" />
-        <button type="submit">Watch</button>
+        <button type="submit">Watch pages</button>
       </form>
+      <p className="hint">
+        Already-watched URLs are skipped; new ones are labeled from their site (e.g. dribbble.com → Dribbble).
+      </p>
+      {result && (
+        <p className="result-summary">
+          Added {result.addedCount}
+          {result.skippedCount > 0 && ` · already watching ${result.skippedCount}`}
+          {result.invalid.length > 0 && ` · skipped invalid: ${result.invalid.join(", ")}`}
+        </p>
+      )}
       {error && <p className="error">{error}</p>}
       <table>
         <thead>

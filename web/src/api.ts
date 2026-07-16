@@ -34,6 +34,13 @@ export interface Settings {
   has_jina_api_key: boolean;
 }
 
+export interface BulkAddResult {
+  added: WatchedPage[];
+  addedCount: number;
+  skippedCount: number;
+  invalid: string[];
+}
+
 /** PUT payload: secret fields are only applied when sent non-empty. */
 export interface SettingsUpdate {
   job_description?: string;
@@ -72,8 +79,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 export const api = {
   listPages: () => request<WatchedPage[]>("/pages"),
-  addPage: (url: string, label: string) =>
-    request<WatchedPage>("/pages", { method: "POST", body: JSON.stringify({ url, label }) }),
+  addPages: (urls: string[]) =>
+    request<BulkAddResult>("/pages", { method: "POST", body: JSON.stringify({ urls }) }),
   updatePage: (id: string, patch: { active?: boolean; label?: string }) =>
     request<WatchedPage>(`/pages/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deletePage: (id: string) => request<{ ok: boolean }>(`/pages/${id}`, { method: "DELETE" }),

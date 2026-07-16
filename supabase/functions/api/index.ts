@@ -2,7 +2,11 @@
 // header matching settings.admin_token (or the ADMIN_TOKEN env var if set).
 //
 //   GET    /pages                 list watched pages
-//   POST   /pages                 { url, label? } add a page
+//   POST   /pages                 { urls: string[] } bulk-add pages: already-watched
+//                                 URLs are silently skipped, new ones get a label
+//                                 auto-derived from the hostname (dribbble.com -> Dribbble).
+//                                 Also accepts a single { url, label? } for a manual add
+//                                 with a custom label.
 //   PATCH  /pages/:id             { active?, label? } update a page
 //   DELETE /pages/:id             remove a page (and its postings)
 //   GET    /settings              read settings (secrets masked to has_* booleans)
@@ -15,6 +19,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import type { Settings } from "../_shared/types.ts";
 import { resolveConfig } from "../_shared/config.ts";
+import { deriveLabel } from "../_shared/label.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -77,13 +82,55 @@ Deno.serve(async (req: Request) => {
 
     if (resource === "pages" && !resourceId && req.method === "POST") {
       const body = await req.json();
+
+      // Bulk add: { urls: [...] }. Already-watched URLs are silently skipped
+      // (not an error); each new one gets a label derived from its hostname.
+      if (Array.isArray(body.urls)) {
+        const seen = new Set<string>();
+        const invalid: string[] = [];
+        const rows: Array<{ url: string; label: string }> = [];
+        for (const raw of body.urls) {
+          const url = typeof raw === "string" ? raw.trim() : "";
+          if (!url) continue;
+          try {
+            new URL(url);
+          } catch {
+            invalid.push(url);
+            continue;
+          }
+          if (seen.has(url)) continue;
+          seen.add(url);
+          rows.push({ url, label: deriveLabel(url) });
+        }
+
+        let added: unknown[] = [];
+        if (rows.length > 0) {
+          const { data, error } = await db
+            .from("watched_pages")
+            .upsert(rows, { onConflict: "url", ignoreDuplicates: true })
+            .select();
+          if (error) throw error;
+          added = data ?? [];
+        }
+
+        return json({
+          added,
+          addedCount: added.length,
+          skippedCount: rows.length - added.length,
+          invalid,
+        }, 201);
+      }
+
+      // Single add with an explicit label override.
       const url = typeof body.url === "string" ? body.url.trim() : "";
       try {
         new URL(url);
       } catch {
         return json({ error: "invalid url" }, 400);
       }
-      const label = typeof body.label === "string" ? body.label.trim() : "";
+      const label = typeof body.label === "string" && body.label.trim() !== ""
+        ? body.label.trim()
+        : deriveLabel(url);
       const { data, error } = await db
         .from("watched_pages")
         .insert({ url, label })

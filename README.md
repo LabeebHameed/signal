@@ -70,14 +70,31 @@ Jina key) is entered in the web UI → **Settings**.
 
 ### 3. Web UI
 
+Run it locally, or deploy it to Vercel — both read the same `api` function URL.
+
+**Locally:**
+
 ```sh
 cd web
 cp .env.example .env    # set VITE_API_URL to your api function URL
 npm install
-npm run dev             # or `npm run build` and host dist/ anywhere static
+npm run dev
 ```
 
-On first load the UI asks for the `ADMIN_TOKEN` value, then:
+**On Vercel:**
+
+1. [Import the repo](https://vercel.com/new) into Vercel.
+2. In the import screen (or later under Project Settings → General), set
+   **Root Directory** to `web`. Vercel auto-detects it as a Vite app
+   (`web/vercel.json` pins the build command/output dir so this works even
+   if auto-detection is skipped).
+3. Add an environment variable **`VITE_API_URL`** = your `api` function URL
+   (`https://<project-ref>.supabase.co/functions/v1/api`).
+4. Deploy. Every push to the branch you deploy from redeploys automatically.
+
+CLI equivalent, from the repo root: `npx vercel --cwd web`.
+
+Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 
 1. **Watched pages** — paste the exact URLs that list postings (not a page that links to them).
 2. **Settings** — your job description (for future filters) and Telegram chat ID.
@@ -107,7 +124,7 @@ supabase/
     poll-pages/index.ts             # the poller
     api/index.ts                    # CRUD for the UI
     _shared/                        # fetcher, LLM adapters, telegram, types
-web/                                # minimal React UI
+web/                                # minimal React UI (vercel.json included)
 ```
 
 ## Out of scope (future phases)

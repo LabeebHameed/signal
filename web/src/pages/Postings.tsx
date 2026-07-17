@@ -1,38 +1,27 @@
-import { useCallback, useEffect, useState } from "react";
-import { api, Posting, PostingSort } from "../api";
+import { useInfiniteQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { api, PostingSort } from "../api";
 import { StatusPill } from "../components/StatusPill";
 import { timeAgo } from "../lib/format";
 
 const PAGE_SIZE = 50;
 
 export default function Postings() {
-  const [items, setItems] = useState<Posting[]>([]);
-  const [total, setTotal] = useState(0);
   const [sort, setSort] = useState<PostingSort>("first_seen_at");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
 
-  const load = useCallback(
-    async (offset: number, append: boolean) => {
-      setLoading(true);
-      setError("");
-      try {
-        const page = await api.listPostings({ limit: PAGE_SIZE, offset, sort, order });
-        setItems((prev) => (append ? [...prev, ...page.items] : page.items));
-        setTotal(page.total);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setLoading(false);
-      }
+  const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage, error } = useInfiniteQuery({
+    queryKey: ["postings", sort, order],
+    queryFn: ({ pageParam }) => api.listPostings({ limit: PAGE_SIZE, offset: pageParam, sort, order }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, p) => n + p.items.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
     },
-    [sort, order],
-  );
+  });
 
-  useEffect(() => {
-    load(0, false);
-  }, [load]);
+  const items = data?.pages.flatMap((p) => p.items) ?? [];
+  const total = data?.pages[0]?.total ?? 0;
 
   const sortBy = (field: PostingSort) => {
     if (sort === field) {
@@ -57,7 +46,7 @@ export default function Postings() {
       </header>
 
       <section className="card">
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error">{error instanceof Error ? error.message : String(error)}</p>}
         <table>
           <thead>
             <tr>
@@ -106,7 +95,7 @@ export default function Postings() {
                 </td>
               </tr>
             ))}
-            {items.length === 0 && !loading && (
+            {items.length === 0 && !isLoading && (
               <tr>
                 <td colSpan={7} className="empty">
                   Nothing extracted yet.
@@ -115,10 +104,10 @@ export default function Postings() {
             )}
           </tbody>
         </table>
-        {items.length < total && (
+        {hasNextPage && (
           <p className="load-more">
-            <button className="secondary" disabled={loading} onClick={() => load(items.length, true)}>
-              {loading ? "Loading…" : `Load more (${total - items.length} remaining)`}
+            <button className="secondary" disabled={isFetchingNextPage} onClick={() => fetchNextPage()}>
+              {isFetchingNextPage ? "Loading…" : `Load more (${total - items.length} remaining)`}
             </button>
           </p>
         )}

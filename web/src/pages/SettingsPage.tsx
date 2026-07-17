@@ -1,24 +1,31 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useEffect, useState } from "react";
 import { api, Settings } from "../api";
 import { useToast } from "../components/Toast";
 
 export default function SettingsPage() {
+  const queryClient = useQueryClient();
+  // refetchInterval/focus refetch are off here: this form holds in-progress
+  // edits, and a background refetch would silently overwrite them. The query
+  // still makes navigating back to this page instant via the shared cache.
+  const { data, error: loadError } = useQuery({
+    queryKey: ["settings"],
+    queryFn: api.getSettings,
+    refetchInterval: false,
+    refetchOnWindowFocus: false,
+  });
   const [settings, setSettings] = useState<Settings | null>(null);
+  useEffect(() => {
+    if (data && !settings) setSettings(data);
+  }, [data, settings]);
+
   // Secret inputs are write-only: the server never echoes stored values back.
   const [secrets, setSecrets] = useState({ llm_api_key: "", telegram_bot_token: "", jina_api_key: "" });
   const [saving, setSaving] = useState(false);
-  const [loadError, setLoadError] = useState("");
   const [tgTest, setTgTest] = useState<{ status: "idle" | "sending" | "ok" | "fail"; message?: string }>({
     status: "idle",
   });
   const toast = useToast();
-
-  useEffect(() => {
-    api
-      .getSettings()
-      .then(setSettings)
-      .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)));
-  }, []);
 
   const testTelegram = async () => {
     setTgTest({ status: "sending" });
@@ -46,6 +53,7 @@ export default function SettingsPage() {
         ...(secrets.jina_api_key.trim() ? { jina_api_key: secrets.jina_api_key.trim() } : {}),
       });
       setSettings(updated);
+      queryClient.setQueryData(["settings"], updated);
       setSecrets({ llm_api_key: "", telegram_bot_token: "", jina_api_key: "" });
       toast.show("Settings saved");
     } catch (err) {
@@ -63,7 +71,7 @@ export default function SettingsPage() {
         <header className="page-header">
           <h1>Settings</h1>
         </header>
-        <p className="error">{loadError}</p>
+        <p className="error">{loadError instanceof Error ? loadError.message : String(loadError)}</p>
       </div>
     );
   }

@@ -57,6 +57,31 @@ interface LlmConfig {
   baseUrl: string;
 }
 
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504, 529]);
+const MAX_ATTEMPTS = 4;
+const BASE_DELAY_MS = 1500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * LLM providers return 429 (rate limit) or 5xx/529 (Anthropic's "overloaded")
+ * under load — transient, not a config problem. Retry with exponential
+ * backoff instead of failing that page's whole crawl for one busy moment.
+ */
+async function fetchWithRetry(url: string, init: RequestInit, label: string): Promise<Response> {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const res = await fetch(url, init);
+    if (res.ok || !RETRYABLE_STATUSES.has(res.status) || attempt === MAX_ATTEMPTS) return res;
+    await res.body?.cancel();
+    const delay = BASE_DELAY_MS * 2 ** (attempt - 1);
+    console.warn(`${label}: HTTP ${res.status}, retrying in ${delay}ms (attempt ${attempt}/${MAX_ATTEMPTS})`);
+    await sleep(delay);
+  }
+  throw new Error("unreachable");
+}
+
 function getConfig(cfg: RuntimeConfig): LlmConfig {
   const provider = cfg.llmProvider.trim();
   const model = cfg.llmModel.trim();
@@ -104,7 +129,7 @@ function validatePostings(parsed: unknown): ExtractedPosting[] {
 }
 
 async function callAnthropic(cfg: LlmConfig, pageUrl: string, content: string): Promise<string> {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetchWithRetry("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -118,7 +143,7 @@ async function callAnthropic(cfg: LlmConfig, pageUrl: string, content: string): 
       output_config: { format: { type: "json_schema", schema: POSTINGS_SCHEMA } },
       messages: [{ role: "user", content: userPrompt(pageUrl, content) }],
     }),
-  });
+  }, "anthropic");
   if (!res.ok) {
     throw new Error(`anthropic API error: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`);
   }
@@ -144,11 +169,11 @@ async function callOpenAiCompatible(cfg: LlmConfig, pageUrl: string, content: st
   ];
   let lastError = "";
   for (const response_format of formats) {
-    const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+    const res = await fetchWithRetry(`${cfg.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${cfg.apiKey}` },
       body: JSON.stringify({ model: cfg.model, messages, ...(response_format ? { response_format } : {}) }),
-    });
+    }, "openai-compatible");
     if (res.ok) {
       const data = await res.json();
       const text = data.choices?.[0]?.message?.content;

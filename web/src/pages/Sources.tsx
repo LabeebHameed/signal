@@ -1,4 +1,5 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { FormEvent, useState } from "react";
 import { api, WatchedPage } from "../api";
 import { StatusPill } from "../components/StatusPill";
 import { useToast } from "../components/Toast";
@@ -6,32 +7,23 @@ import { Toggle } from "../components/Toggle";
 import { timeAgo, truncate } from "../lib/format";
 
 export default function Sources() {
-  const [pages, setPages] = useState<WatchedPage[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
+  const queryClient = useQueryClient();
+  const { data: pages = [], isLoading, error } = useQuery({
+    queryKey: ["pages"],
+    queryFn: api.listPages,
+  });
   const [bulkText, setBulkText] = useState("");
   const [adding, setAdding] = useState(false);
   const toast = useToast();
 
-  const load = useCallback(() => {
-    setLoading(true);
-    api
-      .listPages()
-      .then(setPages)
-      .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
   // Optimistic: flip the switch instantly; only revert if the request actually fails.
   const toggleActive = (page: WatchedPage) => {
     const next = !page.active;
-    setPages((prev) => prev.map((p) => (p.id === page.id ? { ...p, active: next } : p)));
+    queryClient.setQueryData<WatchedPage[]>(["pages"], (prev) =>
+      prev?.map((p) => (p.id === page.id ? { ...p, active: next } : p)));
     api.updatePage(page.id, { active: next }).catch((e) => {
-      setPages((prev) => prev.map((p) => (p.id === page.id ? { ...p, active: page.active } : p)));
+      queryClient.setQueryData<WatchedPage[]>(["pages"], (prev) =>
+        prev?.map((p) => (p.id === page.id ? { ...p, active: page.active } : p)));
       toast.show(e instanceof Error ? e.message : String(e), "error");
     });
   };
@@ -39,9 +31,9 @@ export default function Sources() {
   const removePage = (page: WatchedPage) => {
     if (!confirm(`Stop watching ${page.label || page.url}?`)) return;
     const previous = pages;
-    setPages((prev) => prev.filter((p) => p.id !== page.id));
+    queryClient.setQueryData<WatchedPage[]>(["pages"], (prev) => prev?.filter((p) => p.id !== page.id));
     api.deletePage(page.id).catch((e) => {
-      setPages(previous);
+      queryClient.setQueryData<WatchedPage[]>(["pages"], previous);
       toast.show(e instanceof Error ? e.message : String(e), "error");
     });
   };
@@ -57,7 +49,7 @@ export default function Sources() {
     try {
       const res = await api.addPages(urls);
       setBulkText("");
-      load();
+      queryClient.invalidateQueries({ queryKey: ["pages"] });
       const parts = [`Added ${res.addedCount}`];
       if (res.skippedCount > 0) parts.push(`${res.skippedCount} already watched`);
       if (res.invalid.length > 0) parts.push(`${res.invalid.length} invalid`);
@@ -96,7 +88,7 @@ export default function Sources() {
       </section>
 
       <section className="card">
-        {loadError && <p className="error">{loadError}</p>}
+        {error && <p className="error">{error instanceof Error ? error.message : String(error)}</p>}
         <table>
           <thead>
             <tr>
@@ -137,7 +129,7 @@ export default function Sources() {
                 </td>
               </tr>
             ))}
-            {!loading && pages.length === 0 && (
+            {!isLoading && pages.length === 0 && (
               <tr>
                 <td colSpan={5} className="empty">
                   No pages yet — add a careers page above.

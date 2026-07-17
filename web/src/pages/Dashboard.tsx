@@ -1,48 +1,50 @@
-import { useCallback, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { api, Posting, Settings, WatchedPage } from "../api";
+import { api } from "../api";
 import { StatusPill } from "../components/StatusPill";
 import { useToast } from "../components/Toast";
 import { timeAgo } from "../lib/format";
 
 export default function Dashboard() {
-  const [pages, setPages] = useState<WatchedPage[]>([]);
-  const [recent, setRecent] = useState<Posting[]>([]);
-  const [totalPostings, setTotalPostings] = useState(0);
-  const [settings, setSettings] = useState<Settings | null>(null);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [polling, setPolling] = useState(false);
   const toast = useToast();
 
-  const load = useCallback(() => {
-    setLoading(true);
-    return Promise.all([
-      api.listPages(),
-      api.listPostings({ limit: 8, sort: "first_seen_at", order: "desc" }),
-      api.getSettings(),
-    ])
-      .then(([p, posts, s]) => {
-        setPages(p);
-        setRecent(posts.items);
-        setTotalPostings(posts.total);
-        setSettings(s);
-      })
-      .catch((e) => toast.show(e instanceof Error ? e.message : String(e), "error"))
-      .finally(() => setLoading(false));
-  }, [toast]);
+  const { data: pages = [], isLoading: pagesLoading } = useQuery({
+    queryKey: ["pages"],
+    queryFn: api.listPages,
+  });
+  const { data: recentPage, isLoading: postingsLoading } = useQuery({
+    queryKey: ["postings", "recent"],
+    queryFn: () => api.listPostings({ limit: 8, sort: "first_seen_at", order: "desc" }),
+  });
+  const { data: settings, isLoading: settingsLoading } = useQuery({
+    queryKey: ["settings"],
+    queryFn: api.getSettings,
+  });
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const loading = pagesLoading || postingsLoading || settingsLoading;
+  const recent = recentPage?.items ?? [];
+  const totalPostings = recentPage?.total ?? 0;
 
   const checkNow = async () => {
     setPolling(true);
     try {
-      const summary = await api.poll();
-      const results = summary.results as Array<{ newPostings?: number }>;
-      const newTotal = results.reduce((n, r) => n + (r.newPostings ?? 0), 0);
-      toast.show(`Checked ${summary.pages} source${summary.pages === 1 ? "" : "s"} · ${newTotal} new posting${newTotal === 1 ? "" : "s"}`);
-      await load();
+      const activeCount = pages.filter((p) => p.active).length;
+      await api.poll();
+      toast.show(
+        `Started checking ${activeCount} source${activeCount === 1 ? "" : "s"} — new postings will appear here automatically.`,
+      );
+      // A background run takes anywhere from a few seconds to a couple
+      // minutes depending on page count; a few staggered refetches surface
+      // progress sooner than waiting on the normal 20s background interval.
+      [5000, 15000, 30000, 60000].forEach((ms) =>
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ["pages"] });
+          queryClient.invalidateQueries({ queryKey: ["postings"] });
+        }, ms)
+      );
     } catch (e) {
       toast.show(e instanceof Error ? e.message : String(e), "error");
     } finally {
@@ -69,7 +71,7 @@ export default function Dashboard() {
           <p className="page-subtitle">Last checked {timeAgo(lastChecked)}</p>
         </div>
         <button disabled={polling} onClick={checkNow}>
-          {polling ? "Checking…" : "Check now"}
+          {polling ? "Starting…" : "Check now"}
         </button>
       </header>
 

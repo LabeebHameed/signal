@@ -15,7 +15,9 @@
 //   GET    /postings              postings with sort + pagination:
 //                                 ?limit=50&offset=0&sort=first_seen_at|posted_at|title|company
 //                                 &order=asc|desc  → { items, total }
-//   POST   /poll                  trigger a synchronous poll run, returns summary
+//   POST   /poll                  trigger a poll run in the background, returns
+//                                 { started: true } immediately — watch /pages
+//                                 and /postings for results as they land
 //   POST   /telegram-test         send a test message to the configured chat and
 //                                 return Telegram's exact response (for debugging)
 
@@ -256,10 +258,18 @@ Deno.serve(async (req: Request) => {
     }
 
     if (resource === "poll" && req.method === "POST") {
+      // Background mode (same path the cron job uses): poll-pages returns 202
+      // immediately and keeps running via EdgeRuntime.waitUntil. A synchronous
+      // run here would block this whole request for as long as every active
+      // page takes to fetch + extract + retry, which for more than a handful
+      // of pages can exceed the edge function's execution ceiling and get
+      // killed mid-run — silently skipping every page after the cutoff. The
+      // web UI's live polling (see /pages, /postings) picks up progress as it
+      // lands instead of waiting on this response.
       const res = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/poll-pages`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-token": cfg.adminToken },
-        body: "{}",
+        body: JSON.stringify({ background: true }),
       });
       return json(await res.json(), res.status);
     }

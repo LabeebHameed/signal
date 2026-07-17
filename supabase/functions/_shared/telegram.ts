@@ -2,6 +2,23 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/**
+ * Every bot token is shaped "<bot_id>:<secret>" and a bot's own numeric ID
+ * looks exactly like a valid chat ID. Pasting the bot ID into the chat-ID
+ * field (mistaking it for a personal ID) is a common, easy-to-repeat error —
+ * Telegram itself rejects the send ("chat not found" or "the bot can't send
+ * messages to the bot"), but only after a network round trip. Catch it
+ * up front instead.
+ */
+export function botIdFromToken(token: string): string {
+  return token.split(":")[0] ?? "";
+}
+
+export function chatIdIsBotItself(botToken: string, chatId: string): boolean {
+  const botId = botIdFromToken(botToken);
+  return botId !== "" && botId === chatId.trim();
+}
+
 export async function sendTelegramMessage(botToken: string, chatId: string, html: string): Promise<void> {
   const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
     method: "POST",

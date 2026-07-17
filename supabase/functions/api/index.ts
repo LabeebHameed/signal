@@ -24,7 +24,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import type { Settings } from "../_shared/types.ts";
 import { resolveConfig } from "../_shared/config.ts";
 import { deriveLabel } from "../_shared/label.ts";
-import { sendTelegramMessage } from "../_shared/telegram.ts";
+import { chatIdIsBotItself, sendTelegramMessage } from "../_shared/telegram.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -193,6 +193,21 @@ Deno.serve(async (req: Request) => {
           patch[field] = body[field].trim();
         }
       }
+
+      // Guard against the #1 Telegram setup mistake: pasting the bot's own ID
+      // (the numeric prefix of its token) into the chat-ID field. Telegram
+      // will never let that combination send, so reject it before saving
+      // rather than let it fail mysteriously later.
+      const effectiveChatId = (patch.telegram_chat_id as string | undefined) ?? settings.telegram_chat_id;
+      const effectiveBotToken = (patch.telegram_bot_token as string | undefined) ?? settings.telegram_bot_token;
+      if (effectiveBotToken && effectiveChatId && chatIdIsBotItself(effectiveBotToken, effectiveChatId)) {
+        return json({
+          error:
+            "That chat ID is your bot's own ID (the number before ':' in its token), not yours. " +
+            "Message @userinfobot on Telegram to get your personal chat ID.",
+        }, 400);
+      }
+
       const { data, error } = await db.from("settings").update(patch).eq("id", 1).select().single();
       if (error) throw error;
       return json(maskSettings(data as Settings));
@@ -221,6 +236,13 @@ Deno.serve(async (req: Request) => {
     if (resource === "telegram-test" && req.method === "POST") {
       if (!cfg.telegramBotToken) return json({ error: "no Telegram bot token set in Settings" }, 400);
       if (!cfg.telegramChatId) return json({ error: "no Telegram chat ID set in Settings" }, 400);
+      if (chatIdIsBotItself(cfg.telegramBotToken, cfg.telegramChatId)) {
+        return json({
+          error:
+            "The saved chat ID is your bot's own ID, not yours. Message @userinfobot on Telegram to get your " +
+            "personal chat ID, then update it in Settings.",
+        }, 400);
+      }
       try {
         await sendTelegramMessage(
           cfg.telegramBotToken,

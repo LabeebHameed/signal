@@ -2,6 +2,10 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function escapeAttr(text: string): string {
+  return escapeHtml(text).replace(/"/g, "&quot;");
+}
+
 /**
  * Every bot token is shaped "<bot_id>:<secret>" and a bot's own numeric ID
  * looks exactly like a valid chat ID. Pasting the bot ID into the chat-ID
@@ -40,13 +44,17 @@ export function formatPostingMessage(posting: {
   url?: string | null;
   company?: string | null;
   location?: string | null;
+  posted_at?: string | null;
+  posted_text?: string | null;
 }, pageLabel: string): string {
   const lines: string[] = [];
   lines.push(`\u{1F514} <b>New job posting</b>`);
   lines.push(escapeHtml(posting.title));
   if (posting.company) lines.push(`\u{1F3E2} ${escapeHtml(posting.company)}`);
   if (posting.location) lines.push(`\u{1F4CD} ${escapeHtml(posting.location)}`);
-  if (posting.url) lines.push(escapeHtml(posting.url));
+  if (posting.url) lines.push(`\u{1F517} <a href="${escapeAttr(posting.url)}">Click here</a>`);
+  const posted = posting.posted_text || posting.posted_at;
+  if (posted) lines.push(`\u{1F551} Posted ${escapeHtml(posted)}`);
   lines.push(`<i>from: ${escapeHtml(pageLabel)}</i>`);
   return lines.join("\n");
 }

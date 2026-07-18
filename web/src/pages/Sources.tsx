@@ -1,20 +1,73 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { api, WatchedPage } from "../api";
 import { StatusPill } from "../components/StatusPill";
 import { useToast } from "../components/Toast";
 import { Toggle } from "../components/Toggle";
 import { timeAgo, truncate } from "../lib/format";
 
+// A snapshot of which pages a "Check now" run covers and when it started —
+// used to show a live "checking…" state per row instead of the previous
+// (now stale) last-checked value until each page's real result lands.
+interface PendingCheck {
+  startedAt: number;
+  ids: Set<string>;
+}
+
+const FAST_POLL_MS = 2500;
+const NORMAL_POLL_MS = 20_000;
+const CHECK_TIMEOUT_MS = 3 * 60_000;
+
+function isPageChecking(p: WatchedPage, pendingCheck: PendingCheck | null): boolean {
+  if (!pendingCheck || !pendingCheck.ids.has(p.id)) return false;
+  if (!p.last_checked_at) return true;
+  return new Date(p.last_checked_at).getTime() < pendingCheck.startedAt;
+}
+
 export default function Sources() {
   const queryClient = useQueryClient();
+  const [pendingCheck, setPendingCheck] = useState<PendingCheck | null>(null);
   const { data: pages = [], isLoading, error } = useQuery({
     queryKey: ["pages"],
     queryFn: api.listPages,
+    // While a check is in flight, poll fast so each row's status flips from
+    // "checking…" to its real result as soon as it actually lands.
+    refetchInterval: pendingCheck ? FAST_POLL_MS : NORMAL_POLL_MS,
   });
   const [bulkText, setBulkText] = useState("");
   const [adding, setAdding] = useState(false);
   const toast = useToast();
+
+  // Once every page in the run has a fresher last_checked_at than when the
+  // run started, the run is done — drop back to normal polling.
+  useEffect(() => {
+    if (!pendingCheck) return;
+    const stillChecking = pages.some((p) => isPageChecking(p, pendingCheck));
+    if (!stillChecking) setPendingCheck(null);
+  }, [pages, pendingCheck]);
+
+  // Safety net: never poll fast forever if a run hangs or a page never reports back.
+  useEffect(() => {
+    if (!pendingCheck) return;
+    const timer = setTimeout(() => setPendingCheck(null), CHECK_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [pendingCheck]);
+
+  const checkNow = async () => {
+    const ids = new Set(pages.filter((p) => p.active).map((p) => p.id));
+    if (ids.size === 0) {
+      toast.show("No active sources to check", "error");
+      return;
+    }
+    setPendingCheck({ startedAt: Date.now(), ids });
+    try {
+      await api.poll();
+      toast.show(`Checking ${ids.size} source${ids.size === 1 ? "" : "s"} — this table updates live.`);
+    } catch (e) {
+      setPendingCheck(null);
+      toast.show(e instanceof Error ? e.message : String(e), "error");
+    }
+  };
 
   // Optimistic: flip the switch instantly; only revert if the request actually fails.
   const toggleActive = (page: WatchedPage) => {
@@ -68,6 +121,9 @@ export default function Sources() {
           <h1>Sources</h1>
           <p className="page-subtitle">Career pages Signal checks for new postings.</p>
         </div>
+        <button disabled={Boolean(pendingCheck)} onClick={checkNow}>
+          {pendingCheck ? "Checking…" : "Check now"}
+        </button>
       </header>
 
       <section className="card">
@@ -100,35 +156,42 @@ export default function Sources() {
             </tr>
           </thead>
           <tbody>
-            {pages.map((p) => (
-              <tr key={p.id} className={p.active ? "" : "inactive"}>
-                <td>
-                  <a href={p.url} target="_blank" rel="noreferrer">
-                    {p.label || p.url}
-                  </a>
-                </td>
-                <td>
-                  <Toggle checked={p.active} onChange={() => toggleActive(p)} />
-                </td>
-                <td className="muted">{timeAgo(p.last_checked_at)}</td>
-                <td>
-                  {p.last_error ? (
-                    <StatusPill tone="error" title={p.last_error}>
-                      {truncate(p.last_error, 44)}
-                    </StatusPill>
-                  ) : p.first_crawl_done ? (
-                    <StatusPill tone="ok">ok</StatusPill>
-                  ) : (
-                    <StatusPill tone="pending">pending first crawl</StatusPill>
-                  )}
-                </td>
-                <td>
-                  <button className="danger" onClick={() => removePage(p)}>
-                    Remove
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {pages.map((p) => {
+              const checking = isPageChecking(p, pendingCheck);
+              return (
+                <tr key={p.id} className={p.active ? "" : "inactive"}>
+                  <td>
+                    <a href={p.url} target="_blank" rel="noreferrer">
+                      {p.label || p.url}
+                    </a>
+                  </td>
+                  <td>
+                    <Toggle checked={p.active} onChange={() => toggleActive(p)} />
+                  </td>
+                  <td className={checking ? "checking-text" : "muted"}>
+                    {checking ? "Checking…" : timeAgo(p.last_checked_at)}
+                  </td>
+                  <td>
+                    {checking ? (
+                      <StatusPill tone="checking">checking now</StatusPill>
+                    ) : p.last_error ? (
+                      <StatusPill tone="error" title={p.last_error}>
+                        {truncate(p.last_error, 44)}
+                      </StatusPill>
+                    ) : p.first_crawl_done ? (
+                      <StatusPill tone="ok">ok</StatusPill>
+                    ) : (
+                      <StatusPill tone="pending">pending first crawl</StatusPill>
+                    )}
+                  </td>
+                  <td>
+                    <button className="danger" onClick={() => removePage(p)}>
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
             {!isLoading && pages.length === 0 && (
               <tr>
                 <td colSpan={5} className="empty">

@@ -55,7 +55,7 @@ async function notifyPending(
   if (!cfg.telegramBotToken || !cfg.telegramChatId) return null; // not configured — rows stay queued
   const { data: pending, error } = await db
     .from("postings")
-    .select("id, title, url, company, location")
+    .select("id, title, url, company, location, posted_at, posted_text")
     .eq("page_id", page.id)
     .eq("pending_notify", true)
     .order("first_seen_at")

@@ -514,6 +514,23 @@ label select {
   background: rgba(139, 147, 167, 0.14);
   color: var(--fg-muted);
 }
+.pill-checking,
+.checking-text {
+  animation: pill-pulse 1.4s ease-in-out infinite;
+}
+.pill-checking {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+@keyframes pill-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
 
 /* ---------- Tables ---------- */
 

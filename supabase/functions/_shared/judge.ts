@@ -23,6 +23,7 @@ export interface ScreenablePosting {
 
 const PROFILE_LABELS: Record<keyof FilterProfile, string> = {
   roles: "Target roles",
+  role_synonyms: "Equivalent / adjacent titles (treat as the target role)",
   seniority: "Seniority",
   locations: "Locations / remote",
   skills: "Skills & stack",
@@ -92,7 +93,7 @@ const VERDICTS_SCHEMA = {
 const JUDGE_SYSTEM_PROMPT = `You screen job postings for one job seeker. For each posting, decide whether it deserves to interrupt them with a notification — the judgment a sharp human assistant who knows their preferences well would make, never keyword matching.
 
 Weigh every dimension the profile speaks to:
-- role: is the actual work behind the title what they want? Read titles the way an industry insider would ("Member of Technical Staff" is usually a software engineer; "Solutions Engineer" is usually pre-sales, not product engineering). Synonymous or adjacent titles can still be strong fits.
+- role: is the actual work behind the title what they want? Read titles the way an industry insider would ("Member of Technical Staff" is usually a software engineer; "Solutions Engineer" is usually pre-sales, not product engineering). Synonymous or adjacent titles can still be strong fits. When the profile lists equivalent/adjacent titles, a posting whose title matches any of them in meaning — not exact wording — is the target role; never require the profile's literal phrasing.
 - seniority: infer the level from the title and any cues (junior/senior/staff/lead/intern, "5+ years") and compare with what they target.
 - location: could they actually work this job given their location and remote constraints? "Remote" with a region restriction only counts if the restriction is compatible.
 - skills: does the stated stack or domain line up with theirs?

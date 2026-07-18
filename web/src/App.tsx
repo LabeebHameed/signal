@@ -5,7 +5,9 @@ import Layout from "./components/Layout";
 import TokenGate from "./components/TokenGate";
 import { ToastProvider } from "./components/Toast";
 import Dashboard from "./pages/Dashboard";
+import MatchesPage from "./pages/MatchesPage";
 import Postings from "./pages/Postings";
+import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/SettingsPage";
 import Sources from "./pages/Sources";
 
@@ -29,8 +31,10 @@ export default function App() {
             }
           >
             <Route index element={<Dashboard />} />
+            <Route path="matches" element={<MatchesPage />} />
             <Route path="sources" element={<Sources />} />
             <Route path="postings" element={<Postings />} />
+            <Route path="profile" element={<ProfilePage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
         </Routes>

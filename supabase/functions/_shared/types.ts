@@ -16,6 +16,10 @@ export interface ExtractedPosting {
  */
 export interface FilterProfile {
   roles?: string;
+  /** Equivalent/adjacent job titles for the target roles — companies name the
+   * same work differently ("UI/UX Designer" ≈ "UX Engineer" ≈ "User
+   * Experience Designer"), so the judge treats any of these as the role. */
+  role_synonyms?: string;
   seniority?: string;
   locations?: string;
   skills?: string;
@@ -31,6 +35,7 @@ export interface FilterProfile {
  * prompt, and the settings UI so all three stay in sync. */
 export const FILTER_PROFILE_KEYS: ReadonlyArray<keyof FilterProfile> = [
   "roles",
+  "role_synonyms",
   "seniority",
   "locations",
   "skills",
@@ -63,6 +68,60 @@ export interface PostingVerdict {
   dimensions: VerdictDimension[];
 }
 
+/**
+ * Everything the researcher could establish about one company from live web
+ * evidence (companies.dossier). Nullable fields mean "the evidence didn't
+ * say" — never guessed.
+ */
+export interface CompanyDossier {
+  name: string;
+  website: string | null;
+  /** 1–2 sentences: what the company actually does / has done. */
+  summary: string;
+  industry: string | null;
+  /** e.g. "~120 employees" */
+  size_estimate: string | null;
+  /** e.g. "Series B", "bootstrapped", "public" */
+  stage: string | null;
+  /** Recent funding with year, e.g. "$12M Series A, 2024" */
+  funding: string | null;
+  founded: string | null;
+  /** verified = multiple independent sources confirm a real operating company;
+   * likely_real = credible footprint but thin; uncertain = almost no
+   * independent footprint (caution, not accusation); suspicious = concrete
+   * red flags (scam reports, template site, brand mimicry). */
+  legitimacy: "verified" | "likely_real" | "uncertain" | "suspicious";
+  /** Concrete red/caution observations, empty when none. */
+  flags: string[];
+  confidence: "high" | "medium" | "low";
+  sources: Array<{ title: string; url: string }>;
+}
+
+/** The company layer never blocks — "warn" still notifies, carrying the reason. */
+export type CompanyDecision = "ok" | "warn";
+
+/** Per-posting company verdict (postings.company_verdict). */
+export interface CompanyVerdict {
+  decision: CompanyDecision;
+  /** One user-facing sentence naming the decisive fact. */
+  reason: string;
+}
+
+export type CompanyStatus = "none" | "pending" | "ok" | "warned";
+
+/** A companies-table row (the per-company research cache). */
+export interface CompanyRow {
+  id: string;
+  norm_name: string;
+  display_name: string;
+  dossier: CompanyDossier | null;
+  legitimacy: CompanyDossier["legitimacy"] | "unknown";
+  research_status: "pending" | "ok" | "failed";
+  research_error: string | null;
+  failure_count: number;
+  researched_at: string | null;
+}
+
 export interface WatchedPage {
   id: string;
   url: string;
@@ -80,8 +139,11 @@ export interface WatchedPage {
 // service-role client; the api function returns a masked view of it.
 export interface Settings {
   id: number;
+  /** The raw "what are you looking for" statement the profile was generated from. */
+  profile_input: string;
   filter_profile: FilterProfile;
   filter_mode: FilterMode;
+  company_filter_enabled: boolean;
   telegram_chat_id: string;
   admin_token: string;
   llm_provider: string;
@@ -103,4 +165,5 @@ export interface RuntimeConfig {
   jinaApiKey: string;
   filterProfile: FilterProfile;
   filterMode: FilterMode;
+  companyFilterEnabled: boolean;
 }

@@ -1,4 +1,5 @@
-import type { PostingVerdict } from "./types.ts";
+import type { CompanyDossier, CompanyVerdict, PostingVerdict } from "./types.ts";
+import { companySummaryLine } from "./company.ts";
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -41,6 +42,13 @@ export async function sendTelegramMessage(botToken: string, chatId: string, html
   }
 }
 
+/** Company background researched by the company layer, when it ran. */
+export interface CompanyInfo {
+  display_name: string;
+  dossier: CompanyDossier | null;
+  verdict?: CompanyVerdict | null;
+}
+
 export function formatPostingMessage(posting: {
   title: string;
   url?: string | null;
@@ -48,11 +56,21 @@ export function formatPostingMessage(posting: {
   location?: string | null;
   posted_at?: string | null;
   posted_text?: string | null;
-}, pageLabel: string, verdict?: PostingVerdict | null): string {
+}, pageLabel: string, verdict?: PostingVerdict | null, companyInfo?: CompanyInfo | null): string {
   const lines: string[] = [];
   lines.push(`\u{1F514} <b>New job posting</b>`);
   lines.push(escapeHtml(posting.title));
-  if (posting.company) lines.push(`\u{1F3E2} ${escapeHtml(posting.company)}`);
+  // A researched company replaces the bare name line with its background.
+  if (companyInfo?.dossier) {
+    const name = companyInfo.display_name || posting.company || companyInfo.dossier.name;
+    const summary = companySummaryLine(companyInfo.dossier);
+    lines.push(`\u{1F3E2} <b>${escapeHtml(name)}</b>${summary ? ` — ${escapeHtml(summary)}` : ""}`);
+  } else if (posting.company) {
+    lines.push(`\u{1F3E2} ${escapeHtml(posting.company)}`);
+  }
+  if (companyInfo?.verdict?.decision === "warn" && companyInfo.verdict.reason) {
+    lines.push(`⚠️ ${escapeHtml(companyInfo.verdict.reason)}`);
+  }
   if (posting.location) lines.push(`\u{1F4CD} ${escapeHtml(posting.location)}`);
   if (posting.url) lines.push(`\u{1F517} <a href="${escapeAttr(posting.url)}">Click here</a>`);
   const posted = posting.posted_text || posting.posted_at;

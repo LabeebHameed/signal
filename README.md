@@ -6,15 +6,27 @@ career sites, JS-rendered SPAs) — an LLM extracts the postings, so there are n
 per-site parsers.
 
 **Qualification layer:** between extraction and notification sits an LLM
-judge. You describe what you're looking for as a structured job profile in
-Settings (target roles, seniority, locations/remote, skills, company
-preferences, compensation, must-haves, nice-to-haves, dealbreakers, free-form
-context — all optional free text), and every new posting is judged against it
-the way a person would weigh it: role semantics rather than title keywords,
-inferred seniority, location compatibility, hard requirements versus soft
-preferences. Only postings that qualify reach Telegram; everything else is
-kept, visible, and silent — with the judge's full reasoning stored so no
-decision is a black box.
+judge. On the **Profile** page you describe what you're looking for in one
+sentence ("I'm good at design and I want to be a design engineer — remote,
+no agencies") and Signal expands it into a structured job profile — including
+the equivalent titles companies use for the same work ("UI/UX Designer" ≈
+"UX Engineer" ≈ "User Experience Designer"), so postings never have to match
+your wording. Anything you don't mention stays open; the generated profile is
+shown as an editable preview you can fine-tune. Every new posting is then
+judged against it the way a person would weigh it: role semantics rather than
+title keywords, inferred seniority, location compatibility, hard requirements
+versus soft preferences. Only postings that qualify reach Telegram; everything
+else is kept, visible, and silent — with the judge's full reasoning stored so
+no decision is a black box.
+
+**Company background layer (optional):** before a match is delivered, Signal
+can research the company behind it — one live web search (Jina Search, same
+key as Jina Reader) synthesized by the LLM into a cached dossier: what the
+company does, size, stage, recent funding, and a legitimacy assessment with
+concrete flags (fake-looking companies on job boards are a real thing). This
+layer **never blocks a posting** — an unverifiable or preference-clashing
+company is delivered with a clear caution instead, and the **Matches** page
+shows every qualifying posting as a card with the full company background.
 
 ## How it works
 
@@ -28,9 +40,12 @@ pg_cron (every 15 min)
           4. diff against `postings` table (dedupe key = posting URL, or title+company hash)
           5. LLM judge screens new rows against your job profile (one batched call
              per page) → verdict + 0-100 score + per-dimension reasoning per posting
-               matched  → queued for Telegram
+               matched  → company layer (if enabled), then queued for Telegram
                filtered → kept in the UI with its verdict, never notified
-          6. matched rows → one Telegram message each, quoting the judge's summary
+          6. company layer (optional): research each match's company (Jina Search
+             + LLM dossier, cached 30 days) → ok, or warn with a caution — never blocked
+          7. matched rows → one Telegram message each, quoting the judge's summary
+             and the company background
              (the first-ever crawl of a page is a silent baseline — no notification flood)
 
 web UI (Vite + React, static)
@@ -106,9 +121,12 @@ CLI equivalent, from the repo root: `npx vercel --cwd web`.
 
 Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 
-1. **Watched pages** — paste the exact URLs that list postings (not a page that links to them).
-2. **Settings** — your job profile (what the filter judges postings against) and Telegram chat ID.
-3. **Check now** — trigger a poll immediately instead of waiting for cron.
+1. **Sources** — paste the exact URLs that list postings (not a page that links to them).
+2. **Profile** — describe what you're looking for in one sentence, hit
+   **Generate profile**, review, save. (Optionally enable company background
+   checks here too.)
+3. **Settings** — LLM provider/model/key, Telegram bot token + chat ID.
+4. **Check now** — trigger a poll immediately instead of waiting for cron.
 
 ## Troubleshooting
 
@@ -126,10 +144,18 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 
 ## How filtering works
 
+- **One sentence in, full profile out.** The Profile page turns your
+  description into the structured profile the judge reads (roles, equivalent
+  titles, seniority, locations, skills, company preferences, compensation,
+  must-haves, nice-to-haves, dealbreakers, context). Dimensions you didn't
+  mention stay empty — empty means "no preference", never a guess. The
+  derived profile is fully editable.
 - **The profile is free text per dimension, not rules.** The judge reads it
   like a briefed assistant: "Solutions Engineer" won't match a profile asking
   for product engineering roles just because it contains "Engineer", and
   "Member of Technical Staff" can match one even though no word overlaps.
+  Generated equivalent titles mean "User Experience Designer" matches a
+  profile that said "UI/UX designer".
 - **Missing information is neutral.** Many postings are just a title and a
   location; the judge only counts a dimension against a posting when the
   posting actively contradicts the profile, never because it's silent.
@@ -137,9 +163,9 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   violates a must-have can't be a match; a dealbreaker that clearly applies
   filters the posting outright (and is named in the verdict); nice-to-haves
   only ever boost.
-- **Three modes** (Settings → Job filter): *Off* forwards everything,
-  *Balanced* notifies for `match` and `borderline` verdicts, *Strict* for
-  `match` only. An empty profile behaves like Off.
+- **Three modes** (Profile page): *Off* forwards everything, *Balanced*
+  notifies for `match` and `borderline` verdicts, *Strict* for `match` only.
+  An empty profile behaves like Off.
 - **Nothing is dropped.** Filtered postings stay in the Postings page with
   their verdict, 0-100 score, per-dimension breakdown, and a plain-English
   summary — click any screened row to see why it was (or wasn't) sent. The
@@ -148,6 +174,32 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   "screening" and are retried on the next run — they're never silently
   notified or silently discarded. Changing the profile affects future
   screenings; past verdicts are kept as they were made.
+
+## How the company layer works
+
+- **Opt-in, and needs a Jina key** (Profile page toggle): research without
+  live search evidence would just be the LLM guessing, so without a key the
+  layer stays inactive and matches notify directly.
+- **Matched postings only.** Companies are researched after a posting passes
+  the job judge — mismatches never spend a search. One dossier per company
+  (names are normalized: "Acme", "ACME Inc." and "acme, inc" are one row),
+  cached for 30 days, shared across all pages and postings.
+- **The dossier is evidence-bound.** Built strictly from the search results:
+  what the company does, industry, size, stage, funding (with year), founding
+  year, a legitimacy level (`verified` / `likely_real` / `uncertain` /
+  `suspicious`), concrete flags, confidence, and the sources used. A company
+  that only exists on job boards comes out `uncertain` — caution, not
+  accusation.
+- **Annotate, never block.** Every matched posting is still delivered. A
+  company that can't be verified or clashes with your stated preferences
+  (e.g. "no tiny 2–3 person firms") arrives with a one-line caution in the
+  Telegram message, a badge in the UI, and the full dossier on its Matches
+  card. Research failures retry on later runs (up to 3 attempts), then the
+  posting is delivered with a "couldn't verify" caution rather than being
+  stuck.
+- **Matches page** — every posting that came out of the filter, as cards:
+  judge score and summary, company badge (✓ verified / ? unverified /
+  ⚠ suspicious), the dossier, and source links.
 
 ## Behavior notes
 
@@ -170,9 +222,10 @@ supabase/
   migrations/                       # schema: tables + RLS, pg_cron job, notify
                                     # queue, filter layer
   functions/
-    poll-pages/index.ts             # the poller (fetch → extract → screen → notify)
+    poll-pages/index.ts             # the poller (fetch → extract → screen → company → notify)
     api/index.ts                    # CRUD for the UI
-    _shared/                        # fetcher, LLM adapters, judge, telegram, types
+    _shared/                        # fetcher, LLM adapters, judge, profile expansion,
+                                    # company research, telegram, types
 web/                                # minimal React UI (vercel.json included)
 ```
 

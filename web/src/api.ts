@@ -15,6 +15,8 @@ export interface WatchedPage {
 /** The job profile the filter judges postings against — all optional free text. */
 export interface FilterProfile {
   roles?: string;
+  /** Equivalent/adjacent titles the judge treats as the target role. */
+  role_synonyms?: string;
   seniority?: string;
   locations?: string;
   skills?: string;
@@ -46,6 +48,41 @@ export interface PostingVerdict {
   dimensions: VerdictDimension[];
 }
 
+export type CompanyLegitimacy = "verified" | "likely_real" | "uncertain" | "suspicious";
+
+/** What the company researcher established from live web evidence. */
+export interface CompanyDossier {
+  name: string;
+  website: string | null;
+  summary: string;
+  industry: string | null;
+  size_estimate: string | null;
+  stage: string | null;
+  funding: string | null;
+  founded: string | null;
+  legitimacy: CompanyLegitimacy;
+  flags: string[];
+  confidence: "high" | "medium" | "low";
+  sources: Array<{ title: string; url: string }>;
+}
+
+/** The company layer never blocks — "warn" attaches a caution, nothing more. */
+export interface CompanyVerdict {
+  decision: "ok" | "warn";
+  reason: string;
+}
+
+/** 'pending' = awaiting company research; 'none' = layer off or no company name. */
+export type CompanyStatus = "none" | "pending" | "ok" | "warned";
+
+/** The researched company embedded on a posting. */
+export interface PostingCompany {
+  display_name: string;
+  legitimacy: CompanyLegitimacy | "unknown";
+  dossier: CompanyDossier | null;
+  researched_at: string | null;
+}
+
 export interface Posting {
   id: string;
   title: string;
@@ -60,6 +97,9 @@ export interface Posting {
   filter_status: FilterStatus;
   filter_score: number | null;
   filter_verdict: PostingVerdict | null;
+  company_status: CompanyStatus;
+  company_verdict: CompanyVerdict | null;
+  companies: PostingCompany | null;
   watched_pages: { label: string; url: string } | null;
 }
 
@@ -71,8 +111,11 @@ export interface PostingsPage {
 }
 
 export interface Settings {
+  /** The raw "what are you looking for" statement the profile was generated from. */
+  profile_input: string;
   filter_profile: FilterProfile;
   filter_mode: FilterMode;
+  company_filter_enabled: boolean;
   telegram_chat_id: string;
   llm_provider: string;
   llm_model: string;
@@ -91,8 +134,10 @@ export interface BulkAddResult {
 
 /** PUT payload: secret fields are only applied when sent non-empty. */
 export interface SettingsUpdate {
+  profile_input?: string;
   filter_profile?: FilterProfile;
   filter_mode?: FilterMode;
+  company_filter_enabled?: boolean;
   telegram_chat_id?: string;
   llm_provider?: string;
   llm_model?: string;
@@ -150,4 +195,9 @@ export const api = {
   },
   poll: () => request<{ pages: number; results: unknown[] }>("/poll", { method: "POST" }),
   testTelegram: () => request<{ ok: boolean }>("/telegram-test", { method: "POST" }),
+  expandProfile: (statement: string) =>
+    request<{ profile: FilterProfile }>("/profile/expand", {
+      method: "POST",
+      body: JSON.stringify({ statement }),
+    }),
 };

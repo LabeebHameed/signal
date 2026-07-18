@@ -1,10 +1,12 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { DashboardIcon, PostingsIcon, SettingsIcon, SourcesIcon } from "../lib/icons";
+import { DashboardIcon, MatchesIcon, PostingsIcon, ProfileIcon, SettingsIcon, SourcesIcon } from "../lib/icons";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: DashboardIcon, end: true },
+  { to: "/matches", label: "Matches", icon: MatchesIcon, end: false },
   { to: "/sources", label: "Sources", icon: SourcesIcon, end: false },
   { to: "/postings", label: "Postings", icon: PostingsIcon, end: false },
+  { to: "/profile", label: "Profile", icon: ProfileIcon, end: false },
   { to: "/settings", label: "Settings", icon: SettingsIcon, end: false },
 ];
 

@@ -1,6 +1,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
 import { api, FilterStatus, Posting, PostingSort } from "../api";
+import { CompanyBadge, CompanyPanel } from "../components/CompanyPanel";
 import { PostingStatusPill, VerdictPill } from "../components/PostingStatus";
 import { timeAgo } from "../lib/format";
 
@@ -34,6 +35,7 @@ function VerdictDetail({ posting }: { posting: Posting }) {
           ))}
         </ul>
       )}
+      <CompanyPanel posting={posting} />
     </div>
   );
 }
@@ -128,7 +130,9 @@ export default function Postings() {
                       p.title
                     )}
                   </td>
-                  <td>{p.company ?? "—"}</td>
+                  <td>
+                    {p.companies?.display_name || p.company || "—"} <CompanyBadge posting={p} />
+                  </td>
                   <td>{p.location ?? "—"}</td>
                   <td className="muted">{p.watched_pages?.label || p.watched_pages?.url || "—"}</td>
                   <td className="muted">{p.posted_text || p.posted_at || "—"}</td>

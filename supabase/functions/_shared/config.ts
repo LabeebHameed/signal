@@ -20,5 +20,6 @@ export function resolveConfig(settings: Settings): RuntimeConfig {
     jinaApiKey: env("JINA_API_KEY", settings.jina_api_key),
     filterProfile: settings.filter_profile ?? {},
     filterMode: (settings.filter_mode ?? "balanced") as FilterMode,
+    companyFilterEnabled: settings.company_filter_enabled ?? false,
   };
 }

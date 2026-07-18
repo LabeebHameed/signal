@@ -14,6 +14,10 @@
 //                                 when sent as non-empty strings. filter_profile
 //                                 is sanitized to the known profile fields;
 //                                 filter_mode must be off|balanced|strict.
+//   POST   /profile/expand        { statement } → { profile }: expand the user's
+//                                 one-sentence "what I'm looking for" into a
+//                                 structured filter profile via the LLM. Preview
+//                                 only — nothing is saved (use PUT /settings).
 //   GET    /postings              postings with filter + sort + pagination:
 //                                 ?limit=50&offset=0&sort=first_seen_at|posted_at|title|company|filter_score
 //                                 &order=asc|desc&status=pending|matched|filtered|skipped
@@ -23,6 +27,9 @@
 //                                 and /postings for results as they land
 //   POST   /telegram-test         send a test message to the configured chat and
 //                                 return Telegram's exact response (for debugging)
+//   POST   /company-test          { name } → research one company synchronously and
+//                                 return the raw dossier (for debugging the company
+//                                 layer; requires a Jina API key)
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -30,6 +37,8 @@ import type { FilterProfile, Settings } from "../_shared/types.ts";
 import { FILTER_PROFILE_KEYS } from "../_shared/types.ts";
 import { resolveConfig } from "../_shared/config.ts";
 import { deriveLabel } from "../_shared/label.ts";
+import { expandProfile } from "../_shared/profile.ts";
+import { researchCompany } from "../_shared/company.ts";
 import { chatIdIsBotItself, sendTelegramMessage } from "../_shared/telegram.ts";
 
 const CORS_HEADERS = {
@@ -48,8 +57,10 @@ function json(body: unknown, status = 200): Response {
 /** The settings shape the UI sees: no secret values, only whether they're set. */
 function maskSettings(s: Settings) {
   return {
+    profile_input: s.profile_input ?? "",
     filter_profile: s.filter_profile ?? {},
     filter_mode: s.filter_mode ?? "balanced",
+    company_filter_enabled: s.company_filter_enabled ?? false,
     telegram_chat_id: s.telegram_chat_id,
     llm_provider: s.llm_provider,
     llm_model: s.llm_model,
@@ -190,8 +201,11 @@ Deno.serve(async (req: Request) => {
       const body = await req.json();
       const patch: Record<string, unknown> = {};
       // Non-secret fields: any provided string is applied as-is.
-      for (const field of ["telegram_chat_id", "llm_provider", "llm_model", "llm_base_url"]) {
+      for (const field of ["telegram_chat_id", "llm_provider", "llm_model", "llm_base_url", "profile_input"]) {
         if (typeof body[field] === "string") patch[field] = body[field].trim();
+      }
+      if (typeof body.company_filter_enabled === "boolean") {
+        patch.company_filter_enabled = body.company_filter_enabled;
       }
       // Job filter: the profile is rebuilt from the known fields only (a PUT
       // replaces the whole profile — empty/omitted fields clear).
@@ -244,7 +258,7 @@ Deno.serve(async (req: Request) => {
       let query = db
         .from("postings")
         .select(
-          "id, title, url, company, location, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_score, filter_verdict, watched_pages(label, url)",
+          "id, title, url, company, location, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_score, filter_verdict, company_status, company_verdict, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
           { count: "exact" },
         );
       if (["pending", "matched", "filtered", "skipped"].includes(status)) {
@@ -256,6 +270,14 @@ Deno.serve(async (req: Request) => {
         .range(offset, offset + limit - 1);
       if (error) throw error;
       return json({ items: data, total: count ?? 0 });
+    }
+
+    if (resource === "profile" && resourceId === "expand" && req.method === "POST") {
+      const body = await req.json();
+      const statement = typeof body.statement === "string" ? body.statement.trim() : "";
+      if (statement === "") return json({ error: "statement is required" }, 400);
+      const profile = await expandProfile(statement, cfg);
+      return json({ profile });
     }
 
     if (resource === "telegram-test" && req.method === "POST") {
@@ -278,6 +300,17 @@ Deno.serve(async (req: Request) => {
       } catch (e) {
         return json({ error: e instanceof Error ? e.message : String(e) }, 502);
       }
+    }
+
+    if (resource === "company-test" && req.method === "POST") {
+      if (!cfg.jinaApiKey.trim()) {
+        return json({ error: "company research needs a Jina API key (free at jina.ai) — set it in Settings" }, 400);
+      }
+      const body = await req.json();
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      if (name === "") return json({ error: "name is required" }, 400);
+      const dossier = await researchCompany(name, "manual test from Settings", cfg);
+      return json({ dossier });
     }
 
     if (resource === "poll" && req.method === "POST") {

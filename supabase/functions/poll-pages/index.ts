@@ -5,6 +5,15 @@
 // the ADMIN_TOKEN env var if set — env always wins; see _shared/config.ts).
 // Body {"background": true} → respond 202 immediately and poll in the background
 // (used by the cron job so pg_net doesn't hold a long connection).
+//
+// A run processes active pages in small batches instead of all at once: with
+// enough watched pages, fetch+LLM+retries for every one of them sequentially
+// (or even all at once) can run long enough for the platform to kill the
+// invocation mid-run — silently, with no error recorded for the pages it
+// never reached. Each invocation here only handles one bounded batch, then
+// fires the next batch as a fresh background invocation, so a run of any
+// size eventually covers every page regardless of how long the whole thing
+// takes end to end.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
@@ -18,6 +27,10 @@ import { formatPostingMessage, sendTelegramMessage } from "../_shared/telegram.t
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void } | undefined;
 
 const MAX_NOTIFICATIONS_PER_PAGE_RUN = 20;
+// Pages processed per invocation, all in parallel, before chaining to the
+// next batch. Kept small and equal to the concurrency so each invocation
+// does exactly one wave of work — bounded regardless of total page count.
+const BATCH_SIZE = 4;
 
 interface PageResult {
   url: string;
@@ -172,20 +185,49 @@ async function pollPage(
   return result;
 }
 
-async function runPoll(db: SupabaseClient, cfg: RuntimeConfig): Promise<{ pages: number; results: PageResult[] }> {
-  const { data: pages, error: pagesError } = await db
+/** Fetch pages by id, preserving the given order (Supabase doesn't guarantee row order for `.in()`). */
+async function loadPagesByIds(db: SupabaseClient, ids: string[]): Promise<WatchedPage[]> {
+  const { data, error } = await db.from("watched_pages").select("*").in("id", ids);
+  if (error) throw new Error(`load pages failed: ${error.message}`);
+  const byId = new Map((data ?? []).map((p) => [p.id, p as WatchedPage]));
+  return ids.map((id) => byId.get(id)).filter((p): p is WatchedPage => Boolean(p));
+}
+
+/**
+ * The initial call of a run (no explicit id list yet): every active page,
+ * stalest-checked first, so pages that have been neglected longest — the
+ * ones most likely to have been skipped by a prior truncated run — are
+ * always at the front of the queue.
+ */
+async function loadWorklist(db: SupabaseClient): Promise<WatchedPage[]> {
+  const { data, error } = await db
     .from("watched_pages")
     .select("*")
     .eq("active", true)
+    .order("last_checked_at", { ascending: true, nullsFirst: true })
     .order("created_at");
-  if (pagesError) throw new Error(`load pages failed: ${pagesError.message}`);
+  if (error) throw new Error(`load pages failed: ${error.message}`);
+  return (data ?? []) as WatchedPage[];
+}
+
+async function runPoll(
+  db: SupabaseClient,
+  cfg: RuntimeConfig,
+  pageIds?: string[],
+): Promise<{ pages: number; results: PageResult[] }> {
+  const worklist = pageIds ? await loadPagesByIds(db, pageIds) : await loadWorklist(db);
+  const batch = worklist.slice(0, BATCH_SIZE);
+  const remaining = worklist.slice(BATCH_SIZE);
 
   const results: PageResult[] = [];
-  for (const page of (pages ?? []) as WatchedPage[]) {
-    try {
-      results.push(await pollPage(db, page, cfg));
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+  const settled = await Promise.allSettled(batch.map((page) => pollPage(db, page, cfg)));
+  for (let i = 0; i < settled.length; i++) {
+    const page = batch[i];
+    const outcome = settled[i];
+    if (outcome.status === "fulfilled") {
+      results.push(outcome.value);
+    } else {
+      const message = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
       await db.from("watched_pages").update({
         last_checked_at: new Date().toISOString(),
         last_error: message.slice(0, 500),
@@ -194,6 +236,19 @@ async function runPoll(db: SupabaseClient, cfg: RuntimeConfig): Promise<{ pages:
       results.push({ url: page.url, status: "error", newPostings: 0, notified: 0, error: message });
     }
   }
+
+  if (remaining.length > 0) {
+    try {
+      await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/poll-pages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-token": cfg.adminToken },
+        body: JSON.stringify({ background: true, pageIds: remaining.map((p) => p.id) }),
+      });
+    } catch (e) {
+      console.error("failed to chain next poll batch:", e);
+    }
+  }
+
   return { pages: results.length, results };
 }
 
@@ -221,16 +276,20 @@ Deno.serve(async (req: Request) => {
   }
 
   let background = false;
+  let pageIds: string[] | undefined;
   try {
     const body = await req.json();
     background = body?.background === true;
+    if (Array.isArray(body?.pageIds)) {
+      pageIds = body.pageIds.filter((id: unknown): id is string => typeof id === "string");
+    }
   } catch {
     // no/invalid body → synchronous run
   }
 
   if (background && typeof EdgeRuntime !== "undefined") {
     EdgeRuntime.waitUntil(
-      runPoll(db, cfg).catch((e) => console.error("background poll failed:", e)),
+      runPoll(db, cfg, pageIds).catch((e) => console.error("background poll failed:", e)),
     );
     return new Response(JSON.stringify({ started: true }), {
       status: 202,
@@ -239,7 +298,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const summary = await runPoll(db, cfg);
+    const summary = await runPoll(db, cfg, pageIds);
     return new Response(JSON.stringify(summary), {
       headers: { "Content-Type": "application/json" },
     });

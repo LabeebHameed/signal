@@ -11,10 +11,13 @@
 //   DELETE /pages/:id             remove a page (and its postings)
 //   GET    /settings              read settings (secrets masked to has_* booleans)
 //   PUT    /settings              update settings; secret fields only change
-//                                 when sent as non-empty strings
-//   GET    /postings              postings with sort + pagination:
-//                                 ?limit=50&offset=0&sort=first_seen_at|posted_at|title|company
-//                                 &order=asc|desc  → { items, total }
+//                                 when sent as non-empty strings. filter_profile
+//                                 is sanitized to the known profile fields;
+//                                 filter_mode must be off|balanced|strict.
+//   GET    /postings              postings with filter + sort + pagination:
+//                                 ?limit=50&offset=0&sort=first_seen_at|posted_at|title|company|filter_score
+//                                 &order=asc|desc&status=pending|matched|filtered|skipped
+//                                 → { items, total }
 //   POST   /poll                  trigger a poll run in the background, returns
 //                                 { started: true } immediately — watch /pages
 //                                 and /postings for results as they land
@@ -23,7 +26,8 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import type { Settings } from "../_shared/types.ts";
+import type { FilterProfile, Settings } from "../_shared/types.ts";
+import { FILTER_PROFILE_KEYS } from "../_shared/types.ts";
 import { resolveConfig } from "../_shared/config.ts";
 import { deriveLabel } from "../_shared/label.ts";
 import { chatIdIsBotItself, sendTelegramMessage } from "../_shared/telegram.ts";
@@ -44,7 +48,8 @@ function json(body: unknown, status = 200): Response {
 /** The settings shape the UI sees: no secret values, only whether they're set. */
 function maskSettings(s: Settings) {
   return {
-    job_description: s.job_description,
+    filter_profile: s.filter_profile ?? {},
+    filter_mode: s.filter_mode ?? "balanced",
     telegram_chat_id: s.telegram_chat_id,
     llm_provider: s.llm_provider,
     llm_model: s.llm_model,
@@ -185,8 +190,21 @@ Deno.serve(async (req: Request) => {
       const body = await req.json();
       const patch: Record<string, unknown> = {};
       // Non-secret fields: any provided string is applied as-is.
-      for (const field of ["job_description", "telegram_chat_id", "llm_provider", "llm_model", "llm_base_url"]) {
+      for (const field of ["telegram_chat_id", "llm_provider", "llm_model", "llm_base_url"]) {
         if (typeof body[field] === "string") patch[field] = body[field].trim();
+      }
+      // Job filter: the profile is rebuilt from the known fields only (a PUT
+      // replaces the whole profile — empty/omitted fields clear).
+      if (typeof body.filter_profile === "object" && body.filter_profile !== null) {
+        const profile: FilterProfile = {};
+        for (const key of FILTER_PROFILE_KEYS) {
+          const value = (body.filter_profile as Record<string, unknown>)[key];
+          if (typeof value === "string" && value.trim() !== "") profile[key] = value.trim();
+        }
+        patch.filter_profile = profile;
+      }
+      if (["off", "balanced", "strict"].includes(body.filter_mode)) {
+        patch.filter_mode = body.filter_mode;
       }
       // Secret fields: only overwrite when a non-empty value is sent
       // (the UI sends "" / omits them to mean "keep the current value").
@@ -219,15 +237,20 @@ Deno.serve(async (req: Request) => {
       const params = new URL(req.url).searchParams;
       const limit = Math.min(Number(params.get("limit")) || 50, 200);
       const offset = Math.max(Number(params.get("offset")) || 0, 0);
-      const sortable = ["first_seen_at", "posted_at", "title", "company"];
+      const sortable = ["first_seen_at", "posted_at", "title", "company", "filter_score"];
       const sort = sortable.includes(params.get("sort") ?? "") ? params.get("sort")! : "first_seen_at";
       const ascending = params.get("order") === "asc";
-      const { data, error, count } = await db
+      const status = params.get("status") ?? "";
+      let query = db
         .from("postings")
         .select(
-          "id, title, url, company, location, posted_at, posted_text, first_seen_at, notified_at, pending_notify, watched_pages(label, url)",
+          "id, title, url, company, location, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_score, filter_verdict, watched_pages(label, url)",
           { count: "exact" },
-        )
+        );
+      if (["pending", "matched", "filtered", "skipped"].includes(status)) {
+        query = query.eq("filter_status", status);
+      }
+      const { data, error, count } = await query
         .order(sort, { ascending, nullsFirst: false })
         .order("id") // deterministic tiebreaker so pages don't overlap
         .range(offset, offset + limit - 1);

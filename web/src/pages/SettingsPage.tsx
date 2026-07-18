@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useEffect, useState } from "react";
-import { api, Settings } from "../api";
+import { api, FilterMode, FilterProfile, Settings } from "../api";
 import { useToast } from "../components/Toast";
 
 export default function SettingsPage() {
@@ -43,7 +43,8 @@ export default function SettingsPage() {
     setSaving(true);
     try {
       const updated = await api.saveSettings({
-        job_description: settings.job_description,
+        filter_profile: settings.filter_profile,
+        filter_mode: settings.filter_mode,
         telegram_chat_id: settings.telegram_chat_id,
         llm_provider: settings.llm_provider,
         llm_model: settings.llm_model,
@@ -64,6 +65,11 @@ export default function SettingsPage() {
   };
 
   const secretPlaceholder = (isSet: boolean) => (isSet ? "•••••• set — leave blank to keep" : "not set");
+
+  const setProfile = (field: keyof FilterProfile, value: string) => {
+    if (!settings) return;
+    setSettings({ ...settings, filter_profile: { ...settings.filter_profile, [field]: value } });
+  };
 
   if (loadError && !settings) {
     return (
@@ -91,20 +97,114 @@ export default function SettingsPage() {
       <header className="page-header">
         <div>
           <h1>Settings</h1>
-          <p className="page-subtitle">LLM provider and Telegram delivery configuration.</p>
+          <p className="page-subtitle">Job filter, LLM provider and Telegram delivery configuration.</p>
         </div>
       </header>
 
       <form onSubmit={save}>
         <section className="card">
-          <h2>Job focus</h2>
+          <h2>Job filter</h2>
+          <p className="hint filter-intro">
+            Every new posting is judged against this profile by the LLM — the way a person would weigh it, not by
+            keyword matching. Postings that don't qualify are kept on the Postings page with the full reasoning, but
+            never sent to Telegram. All fields are optional free text; the judge only weighs what you fill in, and
+            leaving everything blank turns filtering off.
+          </p>
           <label>
-            What kind of job are you looking for? <span className="hint">(used by filters in a later version)</span>
+            Filtering
+            <select
+              value={settings.filter_mode}
+              onChange={(e) => setSettings({ ...settings, filter_mode: e.target.value as FilterMode })}
+            >
+              <option value="off">Off — notify about every new posting</option>
+              <option value="balanced">Balanced — notify for matches and borderline calls</option>
+              <option value="strict">Strict — notify only for clear matches</option>
+            </select>
+          </label>
+          <div className="grid-2">
+            <label>
+              Target roles
+              <input
+                value={settings.filter_profile.roles ?? ""}
+                onChange={(e) => setProfile("roles", e.target.value)}
+                placeholder="e.g. Senior frontend engineer; design engineer; founding engineer"
+              />
+            </label>
+            <label>
+              Seniority
+              <input
+                value={settings.filter_profile.seniority ?? ""}
+                onChange={(e) => setProfile("seniority", e.target.value)}
+                placeholder="e.g. senior or staff — no internships or junior roles"
+              />
+            </label>
+            <label>
+              Locations &amp; remote
+              <input
+                value={settings.filter_profile.locations ?? ""}
+                onChange={(e) => setProfile("locations", e.target.value)}
+                placeholder="e.g. remote (must allow India) or hybrid in Bangalore"
+              />
+            </label>
+            <label>
+              Skills &amp; stack
+              <input
+                value={settings.filter_profile.skills ?? ""}
+                onChange={(e) => setProfile("skills", e.target.value)}
+                placeholder="e.g. React, TypeScript; design systems a plus"
+              />
+            </label>
+            <label>
+              Company preferences
+              <input
+                value={settings.filter_profile.company_prefs ?? ""}
+                onChange={(e) => setProfile("company_prefs", e.target.value)}
+                placeholder="e.g. product startups or mid-size companies; no agencies"
+              />
+            </label>
+            <label>
+              Compensation
+              <input
+                value={settings.filter_profile.compensation ?? ""}
+                onChange={(e) => setProfile("compensation", e.target.value)}
+                placeholder="e.g. ≥ $120k — only counts when the posting shows pay"
+              />
+            </label>
+          </div>
+          <label>
+            Must-haves <span className="hint">hard requirements — a posting that clearly violates one can't match</span>
             <textarea
-              value={settings.job_description}
-              onChange={(e) => setSettings({ ...settings, job_description: e.target.value })}
+              value={settings.filter_profile.must_haves ?? ""}
+              onChange={(e) => setProfile("must_haves", e.target.value)}
+              rows={2}
+              placeholder="e.g. remote-friendly for India; individual-contributor role"
+            />
+          </label>
+          <label>
+            Nice-to-haves <span className="hint">soft preferences that boost a posting without being required</span>
+            <textarea
+              value={settings.filter_profile.nice_to_haves ?? ""}
+              onChange={(e) => setProfile("nice_to_haves", e.target.value)}
+              rows={2}
+              placeholder="e.g. developer-tools product; small team; open source"
+            />
+          </label>
+          <label>
+            Dealbreakers <span className="hint">auto-reject — if one clearly applies, the posting is filtered no matter what</span>
+            <textarea
+              value={settings.filter_profile.dealbreakers ?? ""}
+              onChange={(e) => setProfile("dealbreakers", e.target.value)}
+              rows={2}
+              placeholder="e.g. crypto/web3; outsourcing agencies; on-site US only"
+            />
+          </label>
+          <label>
+            About you <span className="hint">background and anything else the judge should know</span>
+            <textarea
+              value={settings.filter_profile.context ?? ""}
+              onChange={(e) => setProfile("context", e.target.value)}
               rows={3}
-              placeholder="e.g. Senior frontend engineer, React, remote or Bangalore"
+              placeholder="e.g. 8 years building React apps, led a design-system team, prefer product-focused work…"
             />
           </label>
         </section>

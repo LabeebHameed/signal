@@ -9,6 +9,60 @@ export interface ExtractedPosting {
   posted_text?: string;
 }
 
+/**
+ * What the user is looking for. Every field is optional free text — the
+ * judge only weighs dimensions the profile actually says something about,
+ * and an entirely empty profile disables filtering.
+ */
+export interface FilterProfile {
+  roles?: string;
+  seniority?: string;
+  locations?: string;
+  skills?: string;
+  company_prefs?: string;
+  compensation?: string;
+  must_haves?: string;
+  nice_to_haves?: string;
+  dealbreakers?: string;
+  context?: string;
+}
+
+/** Canonical profile field order — shared by the API sanitizer, the judge
+ * prompt, and the settings UI so all three stay in sync. */
+export const FILTER_PROFILE_KEYS: ReadonlyArray<keyof FilterProfile> = [
+  "roles",
+  "seniority",
+  "locations",
+  "skills",
+  "company_prefs",
+  "compensation",
+  "must_haves",
+  "nice_to_haves",
+  "dealbreakers",
+  "context",
+];
+
+export type FilterMode = "off" | "balanced" | "strict";
+
+export interface VerdictDimension {
+  /** role | seniority | location | skills | company | compensation | requirements | other */
+  name: string;
+  fit: "strong" | "partial" | "mismatch" | "unknown";
+  note: string;
+}
+
+/** The judge's full reasoning for one posting (postings.filter_verdict). */
+export interface PostingVerdict {
+  verdict: "match" | "borderline" | "mismatch";
+  /** 0–100 overall fit given the visible evidence. */
+  score: number;
+  /** 1–2 sentence human-readable rationale for the decision. */
+  summary: string;
+  /** Which stated dealbreaker applied, if any — forces a mismatch. */
+  dealbreaker: string | null;
+  dimensions: VerdictDimension[];
+}
+
 export interface WatchedPage {
   id: string;
   url: string;
@@ -26,7 +80,8 @@ export interface WatchedPage {
 // service-role client; the api function returns a masked view of it.
 export interface Settings {
   id: number;
-  job_description: string;
+  filter_profile: FilterProfile;
+  filter_mode: FilterMode;
   telegram_chat_id: string;
   admin_token: string;
   llm_provider: string;
@@ -46,4 +101,6 @@ export interface RuntimeConfig {
   telegramBotToken: string;
   telegramChatId: string;
   jinaApiKey: string;
+  filterProfile: FilterProfile;
+  filterMode: FilterMode;
 }

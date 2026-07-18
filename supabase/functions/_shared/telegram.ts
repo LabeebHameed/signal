@@ -1,3 +1,5 @@
+import type { PostingVerdict } from "./types.ts";
+
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -46,7 +48,7 @@ export function formatPostingMessage(posting: {
   location?: string | null;
   posted_at?: string | null;
   posted_text?: string | null;
-}, pageLabel: string): string {
+}, pageLabel: string, verdict?: PostingVerdict | null): string {
   const lines: string[] = [];
   lines.push(`\u{1F514} <b>New job posting</b>`);
   lines.push(escapeHtml(posting.title));
@@ -55,6 +57,14 @@ export function formatPostingMessage(posting: {
   if (posting.url) lines.push(`\u{1F517} <a href="${escapeAttr(posting.url)}">Click here</a>`);
   const posted = posting.posted_text || posting.posted_at;
   if (posted) lines.push(`\u{1F551} Posted ${escapeHtml(posted)}`);
+  // Screened postings carry the judge's take, so the alert itself says why
+  // it was worth sending (only matched postings ever reach Telegram).
+  if (verdict) {
+    const head = verdict.verdict === "match"
+      ? `\u{1F3AF} <b>Match ${verdict.score}/100</b>`
+      : `\u{1F914} <b>Borderline ${verdict.score}/100</b>`;
+    lines.push(verdict.summary ? `${head} — ${escapeHtml(verdict.summary)}` : head);
+  }
   lines.push(`<i>from: ${escapeHtml(pageLabel)}</i>`);
   return lines.join("\n");
 }

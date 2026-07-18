@@ -1,5 +1,7 @@
-// poll-pages: check every active watched page for new job postings and
-// forward each new one to Telegram.
+// poll-pages: check every active watched page for new job postings, screen
+// each new one against the user's job profile (LLM judge — see
+// _shared/judge.ts), and forward the ones that qualify to Telegram.
+// Non-qualifying postings are kept with their verdict but never notified.
 //
 // Auth: requires the x-admin-token header matching settings.admin_token (or
 // the ADMIN_TOKEN env var if set — env always wins; see _shared/config.ts).
@@ -21,12 +23,16 @@ import type { ExtractedPosting, RuntimeConfig, Settings, WatchedPage } from "../
 import { resolveConfig } from "../_shared/config.ts";
 import { fetchPageContent, fetchViaJina, sha256 } from "../_shared/fetcher.ts";
 import { extractPostings } from "../_shared/llm.ts";
+import { judgePostings, profileHasContent } from "../_shared/judge.ts";
 import { formatPostingMessage, sendTelegramMessage } from "../_shared/telegram.ts";
 
 // Supabase edge runtime global (lets a response return while work continues)
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void } | undefined;
 
 const MAX_NOTIFICATIONS_PER_PAGE_RUN = 20;
+// Postings screened per page per run, all in one LLM call. Leftovers stay
+// filter_status='pending' and are picked up by the next run.
+const SCREEN_BATCH = 20;
 // Pages processed per invocation, all in parallel, before chaining to the
 // next batch. Kept small and equal to the concurrency so each invocation
 // does exactly one wave of work — bounded regardless of total page count.
@@ -36,6 +42,8 @@ interface PageResult {
   url: string;
   status: "ok" | "unchanged" | "error";
   newPostings: number;
+  screened: number;
+  filteredOut: number;
   notified: number;
   error?: string;
 }
@@ -54,6 +62,67 @@ function dedupeKeyFor(posting: ExtractedPosting, pageUrl: string): { key: string
 }
 
 /**
+ * Screen this page's unjudged (filter_status='pending') postings against the
+ * user's job profile and decide which ones deserve a notification. Matches
+ * are queued (pending_notify); misses are kept with their verdict but stay
+ * silent. Nothing is ever deleted — every decision is auditable in the UI.
+ *
+ * A judge failure is returned as an error string and the rows simply stay
+ * 'pending', retrying on the next poll run — same contract as notifyPending.
+ * With filtering off (mode 'off' or an empty profile) rows pass straight
+ * through as 'skipped', which also flushes any backlog left from when
+ * filtering was on.
+ */
+async function screenPending(
+  db: SupabaseClient,
+  page: WatchedPage,
+  cfg: RuntimeConfig,
+  result: PageResult,
+): Promise<string | null> {
+  const { data: rows, error } = await db
+    .from("postings")
+    .select("id, title, url, company, location, posted_at, posted_text")
+    .eq("page_id", page.id)
+    .eq("filter_status", "pending")
+    .order("first_seen_at")
+    .limit(SCREEN_BATCH);
+  if (error) return `load screening queue failed: ${error.message}`;
+  if (!rows || rows.length === 0) return null;
+
+  if (cfg.filterMode === "off" || !profileHasContent(cfg.filterProfile)) {
+    const { error: skipError } = await db
+      .from("postings")
+      .update({ filter_status: "skipped", pending_notify: true })
+      .in("id", rows.map((r) => r.id));
+    return skipError ? `queue unfiltered postings failed: ${skipError.message}` : null;
+  }
+
+  let verdicts;
+  try {
+    verdicts = await judgePostings(rows, cfg.filterProfile, page.label || page.url, cfg);
+  } catch (e) {
+    return `screening failed: ${e instanceof Error ? e.message : String(e)}`;
+  }
+
+  for (let i = 0; i < rows.length; i++) {
+    const verdict = verdicts.get(i);
+    if (!verdict) continue; // no valid verdict returned — stays pending, retried next run
+    const notify = verdict.verdict === "match" ||
+      (verdict.verdict === "borderline" && cfg.filterMode === "balanced");
+    const { error: updateError } = await db.from("postings").update({
+      filter_status: notify ? "matched" : "filtered",
+      pending_notify: notify,
+      filter_score: verdict.score,
+      filter_verdict: verdict,
+    }).eq("id", rows[i].id);
+    if (updateError) return `save verdict failed: ${updateError.message}`;
+    result.screened++;
+    if (!notify) result.filteredOut++;
+  }
+  return null;
+}
+
+/**
  * Send Telegram messages for this page's queued (pending_notify) postings.
  * A send failure stops the loop and is returned as an error string — the
  * remaining rows stay queued and retry on the next poll run, and the failure
@@ -68,7 +137,7 @@ async function notifyPending(
   if (!cfg.telegramBotToken || !cfg.telegramChatId) return null; // not configured — rows stay queued
   const { data: pending, error } = await db
     .from("postings")
-    .select("id, title, url, company, location, posted_at, posted_text")
+    .select("id, title, url, company, location, posted_at, posted_text, filter_verdict")
     .eq("page_id", page.id)
     .eq("pending_notify", true)
     .order("first_seen_at")
@@ -79,7 +148,7 @@ async function notifyPending(
       await sendTelegramMessage(
         cfg.telegramBotToken,
         cfg.telegramChatId,
-        formatPostingMessage(row, page.label || page.url),
+        formatPostingMessage(row, page.label || page.url, row.filter_verdict),
       );
     } catch (e) {
       // Telegram is misconfigured or down — don't hammer it for every row.
@@ -99,23 +168,25 @@ async function pollPage(
   page: WatchedPage,
   cfg: RuntimeConfig,
 ): Promise<PageResult> {
-  const result: PageResult = { url: page.url, status: "ok", newPostings: 0, notified: 0 };
+  const result: PageResult = { url: page.url, status: "ok", newPostings: 0, screened: 0, filteredOut: 0, notified: 0 };
 
   // 1. Fetch (preferring whichever source worked before)
   let fetched = await fetchPageContent(page.url, page.fetch_source, cfg.jinaApiKey);
 
-  // 2. Hash short-circuit: nothing changed → no LLM call. Still flush any
-  // notifications left queued by an earlier failed Telegram send.
+  // 2. Hash short-circuit: nothing changed → no extraction call. Still work
+  // through any backlog left by earlier failures: unscreened postings (a
+  // failed judge call) and queued notifications (a failed Telegram send).
   let hash = await sha256(fetched.content);
   if (hash === page.last_content_hash) {
+    const screenError = await screenPending(db, page, cfg, result);
     const notifyError = await notifyPending(db, page, cfg, result);
     await db.from("watched_pages").update({
       last_checked_at: new Date().toISOString(),
-      last_error: notifyError,
+      last_error: screenError ?? notifyError,
       failure_count: 0,
     }).eq("id", page.id);
     result.status = "unchanged";
-    if (notifyError) result.error = notifyError;
+    if (screenError ?? notifyError) result.error = (screenError ?? notifyError)!;
     return result;
   }
 
@@ -135,8 +206,10 @@ async function pollPage(
   }
 
   // 4. Diff by dedupe key — the unique(page_id, dedupe_key) constraint plus
-  // ignoreDuplicates makes this return only genuinely-new rows. New rows on a
-  // non-baseline crawl are queued for notification (pending_notify).
+  // ignoreDuplicates makes this return only genuinely-new rows. New rows on
+  // a non-baseline crawl enter the screening queue (filter_status='pending');
+  // whether they get notified is the screening step's decision. Baseline
+  // rows are never screened or notified.
   const seen = new Set<string>();
   const rows = [];
   for (const p of postings) {
@@ -152,7 +225,8 @@ async function pollPage(
       location: p.location ?? null,
       posted_at: p.posted_at ?? null,
       posted_text: p.posted_text ?? null,
-      pending_notify: page.first_crawl_done,
+      pending_notify: false,
+      filter_status: page.first_crawl_done ? "pending" : "skipped",
       raw: p,
     });
   }
@@ -166,22 +240,26 @@ async function pollPage(
     result.newPostings = (data ?? []).length;
   }
 
-  // 5. Notify queued postings (this run's new ones plus any earlier failures).
+  // 5. Screen the queue (this run's new postings plus any left unjudged by
+  // an earlier failure) — matches come out queued for notification.
+  const screenError = await screenPending(db, page, cfg, result);
+
+  // 6. Notify queued postings (this run's matches plus any earlier failures).
   // Baseline crawls queue nothing, so this is a no-op there.
   const notifyError = await notifyPending(db, page, cfg, result);
 
-  // 6. Persist page state — always, even when Telegram failed.
+  // 7. Persist page state — always, even when screening or Telegram failed.
   const truncatedNote = fetched.truncated ? "content truncated to 100k chars before extraction" : null;
   await db.from("watched_pages").update({
     last_content_hash: hash,
     last_checked_at: new Date().toISOString(),
-    last_error: notifyError ?? truncatedNote,
+    last_error: screenError ?? notifyError ?? truncatedNote,
     failure_count: 0,
     first_crawl_done: true,
     fetch_source: fetched.source,
   }).eq("id", page.id);
 
-  if (notifyError) result.error = notifyError;
+  if (screenError ?? notifyError) result.error = (screenError ?? notifyError)!;
   return result;
 }
 
@@ -233,7 +311,15 @@ async function runPoll(
         last_error: message.slice(0, 500),
         failure_count: page.failure_count + 1,
       }).eq("id", page.id);
-      results.push({ url: page.url, status: "error", newPostings: 0, notified: 0, error: message });
+      results.push({
+        url: page.url,
+        status: "error",
+        newPostings: 0,
+        screened: 0,
+        filteredOut: 0,
+        notified: 0,
+        error: message,
+      });
     }
   }
 

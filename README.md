@@ -5,10 +5,16 @@ new posting appears. Pages can have any structure (Greenhouse, Lever, custom
 career sites, JS-rendered SPAs) — an LLM extracts the postings, so there are no
 per-site parsers.
 
-**MVP scope:** no filtering or qualification. Every new posting on a watched
-page is forwarded. Filters (position match, company checks, custom rules) come
-in a later phase — the "what job are you looking for" field is already collected
-in Settings for that purpose.
+**Qualification layer:** between extraction and notification sits an LLM
+judge. You describe what you're looking for as a structured job profile in
+Settings (target roles, seniority, locations/remote, skills, company
+preferences, compensation, must-haves, nice-to-haves, dealbreakers, free-form
+context — all optional free text), and every new posting is judged against it
+the way a person would weigh it: role semantics rather than title keywords,
+inferred seniority, location compatibility, hard requirements versus soft
+preferences. Only postings that qualify reach Telegram; everything else is
+kept, visible, and silent — with the judge's full reasoning stored so no
+decision is a black box.
 
 ## How it works
 
@@ -20,7 +26,11 @@ pg_cron (every 15 min)
           2. hash content → skip if unchanged since last check (no LLM cost)
           3. LLM extracts postings as JSON  [{title, url, company, location}]
           4. diff against `postings` table (dedupe key = posting URL, or title+company hash)
-          5. new rows → one Telegram message each
+          5. LLM judge screens new rows against your job profile (one batched call
+             per page) → verdict + 0-100 score + per-dimension reasoning per posting
+               matched  → queued for Telegram
+               filtered → kept in the UI with its verdict, never notified
+          6. matched rows → one Telegram message each, quoting the judge's summary
              (the first-ever crawl of a page is a silent baseline — no notification flood)
 
 web UI (Vite + React, static)
@@ -49,7 +59,7 @@ dashboard-managed secrets.
 
 ```sh
 # from the repo root, linked to your project
-supabase db push                      # applies migrations 0001 + 0002
+supabase db push                      # applies all migrations
 
 # deploy the functions (custom x-admin-token auth, so no JWT verification)
 supabase functions deploy poll-pages --no-verify-jwt
@@ -97,7 +107,7 @@ CLI equivalent, from the repo root: `npx vercel --cwd web`.
 Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 
 1. **Watched pages** — paste the exact URLs that list postings (not a page that links to them).
-2. **Settings** — your job description (for future filters) and Telegram chat ID.
+2. **Settings** — your job profile (what the filter judges postings against) and Telegram chat ID.
 3. **Check now** — trigger a poll immediately instead of waiting for cron.
 
 ## Troubleshooting
@@ -114,11 +124,36 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   Reader API key** in Settings (free at [jina.ai](https://jina.ai)) and these
   sites will work.
 
+## How filtering works
+
+- **The profile is free text per dimension, not rules.** The judge reads it
+  like a briefed assistant: "Solutions Engineer" won't match a profile asking
+  for product engineering roles just because it contains "Engineer", and
+  "Member of Technical Staff" can match one even though no word overlaps.
+- **Missing information is neutral.** Many postings are just a title and a
+  location; the judge only counts a dimension against a posting when the
+  posting actively contradicts the profile, never because it's silent.
+- **Must-haves vs. dealbreakers vs. nice-to-haves.** A posting that clearly
+  violates a must-have can't be a match; a dealbreaker that clearly applies
+  filters the posting outright (and is named in the verdict); nice-to-haves
+  only ever boost.
+- **Three modes** (Settings → Job filter): *Off* forwards everything,
+  *Balanced* notifies for `match` and `borderline` verdicts, *Strict* for
+  `match` only. An empty profile behaves like Off.
+- **Nothing is dropped.** Filtered postings stay in the Postings page with
+  their verdict, 0-100 score, per-dimension breakdown, and a plain-English
+  summary — click any screened row to see why it was (or wasn't) sent. The
+  same summary is quoted in the Telegram message for matches.
+- **Failures hold, they don't guess.** If the judge call fails, postings stay
+  "screening" and are retried on the next run — they're never silently
+  notified or silently discarded. Changing the profile affects future
+  screenings; past verdicts are kept as they were made.
+
 ## Behavior notes
 
 - **First crawl of a page is a baseline**: postings are recorded but not
   notified (otherwise adding a page would flood you with every existing job).
-  Postings that appear after that are notified.
+  Postings that appear after that are screened and, if they qualify, notified.
 - **Max 20 notifications per page per run**, then a single "…and N more" message.
 - **JS-rendered pages**: if a direct fetch returns an empty shell (or stops
   yielding postings), the poller retries through [Jina Reader](https://jina.ai/reader/)
@@ -132,18 +167,18 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 
 ```
 supabase/
-  migrations/0001_init.sql          # tables + RLS
-  migrations/0002_schedule_poll.sql # pg_cron job (reads URL/token from Vault)
+  migrations/                       # schema: tables + RLS, pg_cron job, notify
+                                    # queue, filter layer
   functions/
-    poll-pages/index.ts             # the poller
+    poll-pages/index.ts             # the poller (fetch → extract → screen → notify)
     api/index.ts                    # CRUD for the UI
-    _shared/                        # fetcher, LLM adapters, telegram, types
+    _shared/                        # fetcher, LLM adapters, judge, telegram, types
 web/                                # minimal React UI (vercel.json included)
 ```
 
 ## Out of scope (future phases)
 
-- Qualification/filters (position, founder/company, origin, custom rules)
+- Re-screening existing postings when the profile changes
 - Multi-user accounts and auth
 - Telegram `/start` webhook onboarding (auto-capture chat ID)
-- Notification digests, retry queues, per-site tuning
+- Notification digests, per-site tuning

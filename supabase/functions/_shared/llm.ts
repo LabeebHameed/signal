@@ -1,4 +1,4 @@
-// Provider-agnostic LLM extraction. The provider is chosen entirely by config
+// Provider-agnostic LLM access. The provider is chosen entirely by config
 // (settings table via the UI, or env vars — see _shared/config.ts):
 //
 //   llmProvider  "anthropic" | "openai-compatible"
@@ -7,9 +7,13 @@
 //   llmBaseUrl   (openai-compatible only) defaults to https://api.openai.com/v1
 //                e.g. Gemini compat, Groq, Mistral, OpenRouter, local Ollama
 //
-// No vendor SDKs — two thin fetch adapters speaking each provider's raw HTTP API.
+// No vendor SDKs — two thin fetch adapters speaking each provider's raw HTTP
+// API. Both callers (posting extraction below, posting screening in judge.ts)
+// go through the same llmJson() entry point.
 
 import type { ExtractedPosting, RuntimeConfig } from "./types.ts";
+
+const MAX_OUTPUT_TOKENS = 16000;
 
 const POSTINGS_SCHEMA = {
   type: "object",
@@ -55,6 +59,15 @@ interface LlmConfig {
   model: string;
   apiKey: string;
   baseUrl: string;
+}
+
+/** One structured-output request: system + user prompt and the JSON schema
+ * the response must match (schemaName is for providers that name schemas). */
+export interface LlmJsonRequest {
+  system: string;
+  user: string;
+  schema: Record<string, unknown>;
+  schemaName: string;
 }
 
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504, 529]);
@@ -128,7 +141,7 @@ function validatePostings(parsed: unknown): ExtractedPosting[] {
   return out;
 }
 
-async function callAnthropic(cfg: LlmConfig, pageUrl: string, content: string): Promise<string> {
+async function callAnthropic(cfg: LlmConfig, req: LlmJsonRequest): Promise<string> {
   const res = await fetchWithRetry("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -138,10 +151,10 @@ async function callAnthropic(cfg: LlmConfig, pageUrl: string, content: string): 
     },
     body: JSON.stringify({
       model: cfg.model,
-      max_tokens: 16000,
-      system: SYSTEM_PROMPT,
-      output_config: { format: { type: "json_schema", schema: POSTINGS_SCHEMA } },
-      messages: [{ role: "user", content: userPrompt(pageUrl, content) }],
+      max_tokens: MAX_OUTPUT_TOKENS,
+      system: req.system,
+      output_config: { format: { type: "json_schema", schema: req.schema } },
+      messages: [{ role: "user", content: req.user }],
     }),
   }, "anthropic");
   if (!res.ok) {
@@ -155,15 +168,15 @@ async function callAnthropic(cfg: LlmConfig, pageUrl: string, content: string): 
   return text;
 }
 
-async function callOpenAiCompatible(cfg: LlmConfig, pageUrl: string, content: string): Promise<string> {
+async function callOpenAiCompatible(cfg: LlmConfig, req: LlmJsonRequest): Promise<string> {
   const messages = [
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: userPrompt(pageUrl, content) },
+    { role: "system", content: req.system },
+    { role: "user", content: req.user },
   ];
   // Not every OpenAI-compatible provider supports json_schema response_format;
   // degrade json_schema → json_object → none on 4xx.
   const formats: Array<Record<string, unknown> | undefined> = [
-    { type: "json_schema", json_schema: { name: "postings", strict: true, schema: POSTINGS_SCHEMA } },
+    { type: "json_schema", json_schema: { name: req.schemaName, strict: true, schema: req.schema } },
     { type: "json_object" },
     undefined,
   ];
@@ -188,20 +201,32 @@ async function callOpenAiCompatible(cfg: LlmConfig, pageUrl: string, content: st
   throw new Error(`openai-compatible API error: ${lastError}`);
 }
 
+/** Run one structured-output request against the configured provider and
+ * return the parsed JSON (shape validation is the caller's job). */
+export async function llmJson(runtime: RuntimeConfig, req: LlmJsonRequest): Promise<unknown> {
+  const cfg = getConfig(runtime);
+  let text: string;
+  if (cfg.provider === "anthropic") {
+    text = await callAnthropic(cfg, req);
+  } else if (cfg.provider === "openai-compatible") {
+    text = await callOpenAiCompatible(cfg, req);
+  } else {
+    throw new Error(`unknown LLM_PROVIDER "${cfg.provider}" (expected "anthropic" or "openai-compatible")`);
+  }
+  return parseJson(text);
+}
+
 /** Extract job postings from page content using the configured LLM provider. */
 export async function extractPostings(
   pageContent: string,
   pageUrl: string,
   runtime: RuntimeConfig,
 ): Promise<ExtractedPosting[]> {
-  const cfg = getConfig(runtime);
-  let text: string;
-  if (cfg.provider === "anthropic") {
-    text = await callAnthropic(cfg, pageUrl, pageContent);
-  } else if (cfg.provider === "openai-compatible") {
-    text = await callOpenAiCompatible(cfg, pageUrl, pageContent);
-  } else {
-    throw new Error(`unknown LLM_PROVIDER "${cfg.provider}" (expected "anthropic" or "openai-compatible")`);
-  }
-  return validatePostings(parseJson(text));
+  const parsed = await llmJson(runtime, {
+    system: SYSTEM_PROMPT,
+    user: userPrompt(pageUrl, pageContent),
+    schema: POSTINGS_SCHEMA,
+    schemaName: "postings",
+  });
+  return validatePostings(parsed);
 }

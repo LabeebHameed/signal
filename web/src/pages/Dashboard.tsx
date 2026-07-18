@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { StatusPill } from "../components/StatusPill";
+import { PostingStatusPill } from "../components/PostingStatus";
 import { useToast } from "../components/Toast";
 import { timeAgo } from "../lib/format";
 
@@ -124,13 +124,7 @@ export default function Dashboard() {
               </div>
               <div className="activity-meta">
                 <span className="muted">{timeAgo(p.first_seen_at)}</span>
-                {p.notified_at ? (
-                  <StatusPill tone="ok">sent</StatusPill>
-                ) : p.pending_notify ? (
-                  <StatusPill tone="pending">pending</StatusPill>
-                ) : (
-                  <StatusPill tone="muted">baseline</StatusPill>
-                )}
+                <PostingStatusPill posting={p} />
               </div>
             </li>
           ))}

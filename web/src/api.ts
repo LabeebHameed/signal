@@ -12,6 +12,40 @@ export interface WatchedPage {
   first_crawl_done: boolean;
 }
 
+/** The job profile the filter judges postings against — all optional free text. */
+export interface FilterProfile {
+  roles?: string;
+  seniority?: string;
+  locations?: string;
+  skills?: string;
+  company_prefs?: string;
+  compensation?: string;
+  must_haves?: string;
+  nice_to_haves?: string;
+  dealbreakers?: string;
+  context?: string;
+}
+
+export type FilterMode = "off" | "balanced" | "strict";
+
+/** 'pending' = awaiting screening; 'skipped' = never screened (baseline or filter off). */
+export type FilterStatus = "pending" | "matched" | "filtered" | "skipped";
+
+export interface VerdictDimension {
+  name: string;
+  fit: "strong" | "partial" | "mismatch" | "unknown";
+  note: string;
+}
+
+/** The judge's stored reasoning for one posting. */
+export interface PostingVerdict {
+  verdict: "match" | "borderline" | "mismatch";
+  score: number;
+  summary: string;
+  dealbreaker: string | null;
+  dimensions: VerdictDimension[];
+}
+
 export interface Posting {
   id: string;
   title: string;
@@ -23,10 +57,13 @@ export interface Posting {
   first_seen_at: string;
   notified_at: string | null;
   pending_notify: boolean;
+  filter_status: FilterStatus;
+  filter_score: number | null;
+  filter_verdict: PostingVerdict | null;
   watched_pages: { label: string; url: string } | null;
 }
 
-export type PostingSort = "first_seen_at" | "posted_at" | "title" | "company";
+export type PostingSort = "first_seen_at" | "posted_at" | "title" | "company" | "filter_score";
 
 export interface PostingsPage {
   items: Posting[];
@@ -34,7 +71,8 @@ export interface PostingsPage {
 }
 
 export interface Settings {
-  job_description: string;
+  filter_profile: FilterProfile;
+  filter_mode: FilterMode;
   telegram_chat_id: string;
   llm_provider: string;
   llm_model: string;
@@ -53,7 +91,8 @@ export interface BulkAddResult {
 
 /** PUT payload: secret fields are only applied when sent non-empty. */
 export interface SettingsUpdate {
-  job_description?: string;
+  filter_profile?: FilterProfile;
+  filter_mode?: FilterMode;
   telegram_chat_id?: string;
   llm_provider?: string;
   llm_model?: string;
@@ -97,13 +136,16 @@ export const api = {
   getSettings: () => request<Settings>("/settings"),
   saveSettings: (update: SettingsUpdate) =>
     request<Settings>("/settings", { method: "PUT", body: JSON.stringify(update) }),
-  listPostings: (opts: { limit?: number; offset?: number; sort?: PostingSort; order?: "asc" | "desc" } = {}) => {
+  listPostings: (
+    opts: { limit?: number; offset?: number; sort?: PostingSort; order?: "asc" | "desc"; status?: FilterStatus | "" } = {},
+  ) => {
     const params = new URLSearchParams({
       limit: String(opts.limit ?? 50),
       offset: String(opts.offset ?? 0),
       sort: opts.sort ?? "first_seen_at",
       order: opts.order ?? "desc",
     });
+    if (opts.status) params.set("status", opts.status);
     return request<PostingsPage>(`/postings?${params}`);
   },
   poll: () => request<{ pages: number; results: unknown[] }>("/poll", { method: "POST" }),

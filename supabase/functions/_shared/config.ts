@@ -1,7 +1,7 @@
 // Runtime config resolution: an env var with the matching name always wins;
 // otherwise the value comes from the settings table (managed in the web UI).
 
-import type { RuntimeConfig, Settings } from "./types.ts";
+import type { FilterMode, RuntimeConfig, Settings } from "./types.ts";
 
 function env(name: string, fallback: string): string {
   const value = Deno.env.get(name);
@@ -18,5 +18,7 @@ export function resolveConfig(settings: Settings): RuntimeConfig {
     telegramBotToken: env("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token),
     telegramChatId: settings.telegram_chat_id,
     jinaApiKey: env("JINA_API_KEY", settings.jina_api_key),
+    filterProfile: settings.filter_profile ?? {},
+    filterMode: (settings.filter_mode ?? "balanced") as FilterMode,
   };
 }

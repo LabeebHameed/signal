@@ -154,11 +154,15 @@ export default function SettingsPage() {
               />
             </label>
             <label>
-              Chat ID <span className="hint">(numeric ID from @userinfobot — not your bot's own ID)</span>
+              Chat ID(s){" "}
+              <span className="hint">
+                numeric ID from @userinfobot — not your bot's own ID. Comma-separated to notify multiple accounts
+                (e.g. for testing).
+              </span>
               <input
                 value={settings.telegram_chat_id}
                 onChange={(e) => setSettings({ ...settings, telegram_chat_id: e.target.value })}
-                placeholder="123456789"
+                placeholder="123456789, 987654321"
               />
             </label>
           </div>

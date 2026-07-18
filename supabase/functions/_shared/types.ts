@@ -86,6 +86,8 @@ export interface CompanyDossier {
   /** Recent funding with year, e.g. "$12M Series A, 2024" */
   funding: string | null;
   founded: string | null;
+  /** Short recognizable category, e.g. "Startup", "Public company", "Non-profit", "B2B SaaS", "Agency". */
+  company_type: string | null;
   /** verified = multiple independent sources confirm a real operating company;
    * likely_real = credible footprint but thin; uncertain = almost no
    * independent footprint (caution, not accusation); suspicious = concrete

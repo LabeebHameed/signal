@@ -119,6 +119,7 @@ const DOSSIER_SCHEMA = {
     stage: { type: ["string", "null"] },
     funding: { type: ["string", "null"] },
     founded: { type: ["string", "null"] },
+    company_type: { type: ["string", "null"] },
     legitimacy: { type: "string", enum: LEGITIMACY_LEVELS },
     flags: { type: "array", items: { type: "string" } },
     confidence: { type: "string", enum: CONFIDENCE_LEVELS },
@@ -134,7 +135,7 @@ const DOSSIER_SCHEMA = {
   },
   required: [
     "name", "website", "summary", "industry", "size_estimate", "stage",
-    "funding", "founded", "legitimacy", "flags", "confidence", "sources",
+    "funding", "founded", "company_type", "legitimacy", "flags", "confidence", "sources",
   ],
   additionalProperties: false,
 } as const;
@@ -144,6 +145,7 @@ const DOSSIER_SYSTEM_PROMPT = `You research companies for a job seeker deciding 
 - summary: 1–2 sentences on what the company actually does / has done.
 - website: the company's own site if the evidence shows it, else null.
 - size_estimate, stage, funding, founded: only when the evidence states them, else null. For funding include the year ("$12M Series A, 2024").
+- company_type: a short 1–3 word category the seeker would instantly recognize — e.g. "Startup", "Public company", "Non-profit", "B2B SaaS", "Agency", "Enterprise". Base it on the evidence (stage, structure, business model); null only when truly indeterminable.
 - legitimacy:
   - "verified" — multiple independent sources confirm a real operating company.
   - "likely_real" — credible footprint but thin (few sources, small company).
@@ -223,6 +225,7 @@ function validateDossier(parsed: unknown, fallbackName: string): CompanyDossier 
     stage: optString(d.stage),
     funding: optString(d.funding),
     founded: optString(d.founded),
+    company_type: optString(d.company_type),
     legitimacy,
     flags,
     confidence,

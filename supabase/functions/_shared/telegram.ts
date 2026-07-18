@@ -1,5 +1,4 @@
-import type { CompanyDossier, CompanyVerdict, PostingVerdict } from "./types.ts";
-import { companySummaryLine } from "./company.ts";
+import type { CompanyDossier } from "./types.ts";
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -21,9 +20,15 @@ export function botIdFromToken(token: string): string {
   return token.split(":")[0] ?? "";
 }
 
+/** Chat IDs are comma-separated to support notifying multiple accounts
+ * (e.g. testing on a second phone) — blank entries are dropped. */
+export function parseChatIds(raw: string): string[] {
+  return raw.split(",").map((s) => s.trim()).filter((s) => s !== "");
+}
+
 export function chatIdIsBotItself(botToken: string, chatId: string): boolean {
   const botId = botIdFromToken(botToken);
-  return botId !== "" && botId === chatId.trim();
+  return botId !== "" && parseChatIds(chatId).some((id) => id === botId);
 }
 
 export async function sendTelegramMessage(botToken: string, chatId: string, html: string): Promise<void> {
@@ -42,47 +47,50 @@ export async function sendTelegramMessage(botToken: string, chatId: string, html
   }
 }
 
+/** Send the same message to every configured chat ID. Stops at the first
+ * failure — the caller's retry-on-next-run handling covers the rest, same
+ * as the single-recipient contract this replaces. */
+export async function sendTelegramMessageToAll(botToken: string, chatIds: string[], html: string): Promise<void> {
+  if (chatIds.length === 0) throw new Error("no Telegram chat ID configured");
+  for (const chatId of chatIds) {
+    await sendTelegramMessage(botToken, chatId, html);
+  }
+}
+
 /** Company background researched by the company layer, when it ran. */
 export interface CompanyInfo {
   display_name: string;
   dossier: CompanyDossier | null;
-  verdict?: CompanyVerdict | null;
 }
 
+/**
+ * Deliberately minimal: title, company (+ type when researched), location,
+ * and a link. The judge's full reasoning and the company dossier live on
+ * the Matches page — Telegram is just the ping to go look.
+ */
 export function formatPostingMessage(posting: {
   title: string;
   url?: string | null;
   company?: string | null;
   location?: string | null;
-  posted_at?: string | null;
-  posted_text?: string | null;
-}, pageLabel: string, verdict?: PostingVerdict | null, companyInfo?: CompanyInfo | null): string {
+}, pageLabel: string, companyInfo?: CompanyInfo | null): string {
   const lines: string[] = [];
   lines.push(`\u{1F514} <b>New job posting</b>`);
   lines.push(escapeHtml(posting.title));
-  // A researched company replaces the bare name line with its background.
-  if (companyInfo?.dossier) {
-    const name = companyInfo.display_name || posting.company || companyInfo.dossier.name;
-    const summary = companySummaryLine(companyInfo.dossier);
-    lines.push(`\u{1F3E2} <b>${escapeHtml(name)}</b>${summary ? ` — ${escapeHtml(summary)}` : ""}`);
-  } else if (posting.company) {
-    lines.push(`\u{1F3E2} ${escapeHtml(posting.company)}`);
-  }
-  if (companyInfo?.verdict?.decision === "warn" && companyInfo.verdict.reason) {
-    lines.push(`⚠️ ${escapeHtml(companyInfo.verdict.reason)}`);
+  lines.push("");
+
+  const companyName = companyInfo?.display_name || posting.company;
+  if (companyName) {
+    const type = companyInfo?.dossier?.company_type;
+    lines.push(`\u{1F3E2} ${escapeHtml(companyName)}${type ? ` — ${escapeHtml(type)}` : ""}`);
   }
   if (posting.location) lines.push(`\u{1F4CD} ${escapeHtml(posting.location)}`);
-  if (posting.url) lines.push(`\u{1F517} <a href="${escapeAttr(posting.url)}">Click here</a>`);
-  const posted = posting.posted_text || posting.posted_at;
-  if (posted) lines.push(`\u{1F551} Posted ${escapeHtml(posted)}`);
-  // Screened postings carry the judge's take, so the alert itself says why
-  // it was worth sending (only matched postings ever reach Telegram).
-  if (verdict) {
-    const head = verdict.verdict === "match"
-      ? `\u{1F3AF} <b>Match ${verdict.score}/100</b>`
-      : `\u{1F914} <b>Borderline ${verdict.score}/100</b>`;
-    lines.push(verdict.summary ? `${head} — ${escapeHtml(verdict.summary)}` : head);
+
+  if (posting.url) {
+    lines.push(`\u{1F517} ${escapeHtml(pageLabel)} - <a href="${escapeAttr(posting.url)}">Link</a>`);
+  } else if (pageLabel) {
+    lines.push(`\u{1F517} ${escapeHtml(pageLabel)}`);
   }
-  lines.push(`<i>from: ${escapeHtml(pageLabel)}</i>`);
+
   return lines.join("\n");
 }

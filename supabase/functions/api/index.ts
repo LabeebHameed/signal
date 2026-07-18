@@ -39,7 +39,7 @@ import { resolveConfig } from "../_shared/config.ts";
 import { deriveLabel } from "../_shared/label.ts";
 import { expandProfile } from "../_shared/profile.ts";
 import { researchCompany } from "../_shared/company.ts";
-import { chatIdIsBotItself, sendTelegramMessage } from "../_shared/telegram.ts";
+import { chatIdIsBotItself, parseChatIds, sendTelegramMessageToAll } from "../_shared/telegram.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -291,12 +291,13 @@ Deno.serve(async (req: Request) => {
         }, 400);
       }
       try {
-        await sendTelegramMessage(
+        const chatIds = parseChatIds(cfg.telegramChatId);
+        await sendTelegramMessageToAll(
           cfg.telegramBotToken,
-          cfg.telegramChatId,
+          chatIds,
           "✅ Test message from Signal — your Telegram notifications are working.",
         );
-        return json({ ok: true });
+        return json({ ok: true, sentTo: chatIds.length });
       } catch (e) {
         return json({ error: e instanceof Error ? e.message : String(e) }, 502);
       }

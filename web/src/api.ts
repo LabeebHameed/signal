@@ -60,6 +60,7 @@ export interface CompanyDossier {
   stage: string | null;
   funding: string | null;
   founded: string | null;
+  company_type: string | null;
   legitimacy: CompanyLegitimacy;
   flags: string[];
   confidence: "high" | "medium" | "low";

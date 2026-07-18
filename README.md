@@ -25,8 +25,9 @@ key as Jina Reader) synthesized by the LLM into a cached dossier: what the
 company does, size, stage, recent funding, and a legitimacy assessment with
 concrete flags (fake-looking companies on job boards are a real thing). This
 layer **never blocks a posting** — an unverifiable or preference-clashing
-company is delivered with a clear caution instead, and the **Matches** page
-shows every qualifying posting as a card with the full company background.
+company still notifies, and the **Matches** page shows every qualifying
+posting as a card with the full company background and caution when there is
+one (the Telegram message itself stays short — see below).
 
 ## How it works
 
@@ -44,8 +45,10 @@ pg_cron (every 15 min)
                filtered → kept in the UI with its verdict, never notified
           6. company layer (optional): research each match's company (Jina Search
              + LLM dossier, cached 30 days) → ok, or warn with a caution — never blocked
-          7. matched rows → one Telegram message each, quoting the judge's summary
-             and the company background
+          7. matched rows → one short Telegram message each: title, company
+             (+ type when researched), location, link — the full judge
+             reasoning and company dossier live on the Matches page, not in
+             the message itself
              (the first-ever crawl of a page is a silent baseline — no notification flood)
 
 web UI (Vite + React, static)
@@ -69,6 +72,8 @@ dashboard-managed secrets.
 1. Message **@BotFather** on Telegram → `/newbot` → follow prompts → copy the **bot token**.
 2. Message **@userinfobot** → it replies with your **chat ID**.
 3. Open a chat with your new bot and press **Start** (bots can only message people who started them).
+4. Optional: to notify more than one account (e.g. while testing), enter multiple chat IDs
+   comma-separated in Settings — each one needs its own Start step above.
 
 ### 2. Supabase project
 
@@ -190,16 +195,17 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   `suspicious`), concrete flags, confidence, and the sources used. A company
   that only exists on job boards comes out `uncertain` — caution, not
   accusation.
-- **Annotate, never block.** Every matched posting is still delivered. A
-  company that can't be verified or clashes with your stated preferences
-  (e.g. "no tiny 2–3 person firms") arrives with a one-line caution in the
-  Telegram message, a badge in the UI, and the full dossier on its Matches
-  card. Research failures retry on later runs (up to 3 attempts), then the
-  posting is delivered with a "couldn't verify" caution rather than being
-  stuck.
+- **Annotate, never block.** Every matched posting is still delivered — the
+  Telegram message stays short (title, company + type, location, link);
+  a company that can't be verified or clashes with your stated preferences
+  (e.g. "no tiny 2–3 person firms") gets its caution on the **Matches** page
+  instead, with a badge and the full dossier. Research failures retry on
+  later runs (up to 3 attempts), then the posting is delivered with a
+  "couldn't verify" caution rather than being stuck.
 - **Matches page** — every posting that came out of the filter, as cards:
   judge score and summary, company badge (✓ verified / ? unverified /
-  ⚠ suspicious), the dossier, and source links.
+  ⚠ suspicious), the dossier, and source links. This is where the full
+  reasoning lives — Telegram is just the ping to go look.
 
 ## Behavior notes
 

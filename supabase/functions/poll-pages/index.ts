@@ -44,7 +44,7 @@ import {
   researchCompany,
   researchRetryDue,
 } from "../_shared/company.ts";
-import { formatPostingMessage, sendTelegramMessage } from "../_shared/telegram.ts";
+import { formatPostingMessage, parseChatIds, sendTelegramMessageToAll } from "../_shared/telegram.ts";
 
 // Supabase edge runtime global (lets a response return while work continues)
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void } | undefined;
@@ -358,11 +358,12 @@ async function notifyPending(
   cfg: RuntimeConfig,
   result: PageResult,
 ): Promise<string | null> {
-  if (!cfg.telegramBotToken || !cfg.telegramChatId) return null; // not configured — rows stay queued
+  const chatIds = parseChatIds(cfg.telegramChatId);
+  if (!cfg.telegramBotToken || chatIds.length === 0) return null; // not configured — rows stay queued
   const { data: pending, error } = await db
     .from("postings")
     .select(
-      "id, title, url, company, location, posted_at, posted_text, filter_verdict, company_verdict, companies(display_name, dossier)",
+      "id, title, url, company, location, companies(display_name, dossier)",
     )
     .eq("page_id", page.id)
     .eq("pending_notify", true)
@@ -374,15 +375,10 @@ async function notifyPending(
     // it at most one row.
     const company = row.companies as unknown as { display_name: string; dossier: CompanyRow["dossier"] } | null;
     try {
-      await sendTelegramMessage(
+      await sendTelegramMessageToAll(
         cfg.telegramBotToken,
-        cfg.telegramChatId,
-        formatPostingMessage(
-          row,
-          page.label || page.url,
-          row.filter_verdict,
-          company ? { ...company, verdict: row.company_verdict } : null,
-        ),
+        chatIds,
+        formatPostingMessage(row, page.label || page.url, company),
       );
     } catch (e) {
       // Telegram is misconfigured or down — don't hammer it for every row.

@@ -17,7 +17,7 @@ export function resolveConfig(settings: Settings): RuntimeConfig {
     llmBaseUrl: env("LLM_BASE_URL", settings.llm_base_url),
     telegramBotToken: env("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token),
     telegramChatId: settings.telegram_chat_id,
-    jinaApiKey: env("JINA_API_KEY", settings.jina_api_key),
+    tavilyApiKey: env("TAVILY_API_KEY", settings.tavily_api_key),
     filterProfile: settings.filter_profile ?? {},
     filterMode: (settings.filter_mode ?? "balanced") as FilterMode,
     companyFilterEnabled: settings.company_filter_enabled ?? false,

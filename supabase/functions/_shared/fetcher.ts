@@ -1,6 +1,8 @@
-// Page fetching that copes with heterogeneous sites:
-// 1. plain fetch (works for server-rendered pages: Greenhouse, Lever, most boards)
-// 2. Jina Reader fallback (renders JS, returns markdown) for SPA-style pages
+// Page fetching: plain HTTP GET only. Sites that require JavaScript to
+// render their content (SPA shells) aren't supported — they simply come back
+// with little or no extractable content and the poller surfaces the fetch
+// error (or, for a page that "succeeds" with an empty shell, yields zero
+// postings) rather than silently guessing.
 
 const MAX_CONTENT_CHARS = 100_000;
 const USER_AGENT =
@@ -8,7 +10,6 @@ const USER_AGENT =
 
 export interface FetchResult {
   content: string;
-  source: "direct" | "jina";
   truncated: boolean;
 }
 
@@ -34,87 +35,29 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-function cap(content: string): { content: string; truncated: boolean } {
+function cap(content: string): FetchResult {
   if (content.length <= MAX_CONTENT_CHARS) return { content, truncated: false };
   return { content: content.slice(0, MAX_CONTENT_CHARS), truncated: true };
 }
 
-async function fetchWithTimeout(url: string, headers: Record<string, string>, timeoutMs: number): Promise<Response> {
+export async function fetchPageContent(url: string): Promise<FetchResult> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  let res: Response;
   try {
-    return await fetch(url, { headers, signal: controller.signal, redirect: "follow" });
+    res = await fetch(url, {
+      headers: { "User-Agent": USER_AGENT, "Accept": "text/html,*/*" },
+      signal: controller.signal,
+      redirect: "follow",
+    });
   } finally {
     clearTimeout(timer);
   }
-}
-
-export async function fetchDirect(url: string): Promise<FetchResult> {
-  const res = await fetchWithTimeout(url, { "User-Agent": USER_AGENT, "Accept": "text/html,*/*" }, 20_000);
-  if (!res.ok) throw new Error(`direct fetch failed: HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`fetch failed: HTTP ${res.status}`);
   const body = await res.text();
   const contentType = res.headers.get("content-type") ?? "";
   const text = contentType.includes("html") ? htmlToText(body) : body.trim();
-  return { ...cap(text), source: "direct" };
-}
-
-export async function fetchViaJina(url: string, jinaApiKey = ""): Promise<FetchResult> {
-  // Anonymous access works but is rate-limited per IP; an optional free key
-  // from jina.ai raises the limits considerably.
-  const headers: Record<string, string> = { "Accept": "text/plain" };
-  if (jinaApiKey) headers["Authorization"] = `Bearer ${jinaApiKey}`;
-  const res = await fetchWithTimeout(`https://r.jina.ai/${url}`, headers, 45_000);
-  if (res.status === 401 || res.status === 429) {
-    throw new Error(
-      `jina fetch rate-limited/unauthorized (HTTP ${res.status}) — set the JINA_API_KEY secret (free key at jina.ai) to raise limits`,
-    );
-  }
-  if (!res.ok) throw new Error(`jina fetch failed: HTTP ${res.status}`);
-  const text = (await res.text()).trim();
-  return { ...cap(text), source: "jina" };
-}
-
-/** Heuristic: page body so small it's almost certainly an empty JS shell. */
-export function looksLikeShell(content: string): boolean {
-  return content.length < 500;
-}
-
-/**
- * Fetch page content, preferring the source that worked last time, and falling
- * back to the other source when the preferred one fails or returns an empty
- * JS shell. Anti-bot walls (403s, connection resets) on direct fetches are the
- * common case this covers — Jina Reader's rendering infra often gets through.
- */
-export async function fetchPageContent(
-  url: string,
-  preferredSource: "direct" | "jina",
-  jinaApiKey = "",
-): Promise<FetchResult> {
-  const attempt = (source: "direct" | "jina") =>
-    source === "jina" ? fetchViaJina(url, jinaApiKey) : fetchDirect(url);
-  const order: Array<"direct" | "jina"> =
-    preferredSource === "jina" ? ["jina", "direct"] : ["direct", "jina"];
-
-  const errors: string[] = [];
-  let bestShell: FetchResult | null = null;
-  for (const source of order) {
-    try {
-      const result = await attempt(source);
-      // A tiny body is usually an empty JS shell (or a block page) — try the
-      // other source before settling for it.
-      if (looksLikeShell(result.content)) {
-        if (!bestShell || result.content.length > bestShell.content.length) bestShell = result;
-        continue;
-      }
-      return result;
-    } catch (e) {
-      errors.push(`${source}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-  // Neither source produced substantial content. A tiny-but-successful fetch
-  // is still valid — some boards are legitimately near-empty ("No open roles").
-  if (bestShell) return bestShell;
-  throw new Error(errors.join(" | "));
+  return cap(text);
 }
 
 export async function sha256(text: string): Promise<string> {

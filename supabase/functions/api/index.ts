@@ -29,7 +29,7 @@
 //                                 return Telegram's exact response (for debugging)
 //   POST   /company-test          { name } → research one company synchronously and
 //                                 return the raw dossier (for debugging the company
-//                                 layer; requires a Jina API key)
+//                                 layer; requires a Tavily API key)
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -67,7 +67,7 @@ function maskSettings(s: Settings) {
     llm_base_url: s.llm_base_url,
     has_llm_api_key: s.llm_api_key !== "",
     has_telegram_bot_token: s.telegram_bot_token !== "",
-    has_jina_api_key: s.jina_api_key !== "",
+    has_tavily_api_key: s.tavily_api_key !== "",
   };
 }
 
@@ -222,7 +222,7 @@ Deno.serve(async (req: Request) => {
       }
       // Secret fields: only overwrite when a non-empty value is sent
       // (the UI sends "" / omits them to mean "keep the current value").
-      for (const field of ["llm_api_key", "telegram_bot_token", "jina_api_key"]) {
+      for (const field of ["llm_api_key", "telegram_bot_token", "tavily_api_key"]) {
         if (typeof body[field] === "string" && body[field].trim() !== "") {
           patch[field] = body[field].trim();
         }
@@ -304,8 +304,8 @@ Deno.serve(async (req: Request) => {
     }
 
     if (resource === "company-test" && req.method === "POST") {
-      if (!cfg.jinaApiKey.trim()) {
-        return json({ error: "company research needs a Jina API key (free at jina.ai) — set it in Settings" }, 400);
+      if (!cfg.tavilyApiKey.trim()) {
+        return json({ error: "company research needs a Tavily API key (free at tavily.com) — set it in Settings" }, 400);
       }
       const body = await req.json();
       const name = typeof body.name === "string" ? body.name.trim() : "";

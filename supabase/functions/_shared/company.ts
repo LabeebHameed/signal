@@ -2,12 +2,14 @@
 // (is it a real operating company? what does it do? size, stage, funding?)
 // and judge the findings against the seeker's company preferences.
 //
-// Research = one Jina Search call (s.jina.ai, same key as Jina Reader) for
-// live web evidence + one LLM call to synthesize a structured dossier from
-// that evidence only. Dossiers are cached per company (companies table) and
-// refreshed after COMPANY_REFRESH_DAYS. The layer never blocks a posting —
-// the worst outcome is a "warn" verdict, delivered with the notification and
-// shown in the UI, phrased as "couldn't verify", never "fake" as fact.
+// Research = one Tavily web search call for live evidence + one LLM call to
+// synthesize a structured dossier from that evidence only. Dossiers are
+// cached per company (companies table) and refreshed after
+// COMPANY_REFRESH_DAYS, so a repeat sighting of the same company is free —
+// only genuinely new or stale companies spend a search. The layer never
+// blocks a posting — the worst outcome is a "warn" verdict, delivered with
+// the notification and shown in the UI, phrased as "couldn't verify", never
+// "fake" as fact.
 
 import type { CompanyDossier, CompanyRow, CompanyVerdict, FilterProfile, RuntimeConfig } from "./types.ts";
 import { llmJson } from "./llm.ts";
@@ -43,10 +45,10 @@ export function normalizeCompanyName(name: string): string {
   return tokens.join(" ");
 }
 
-/** The layer needs both the toggle and a Jina key: research without live
+/** The layer needs both the toggle and a Tavily key: research without live
  * search evidence would be the LLM guessing, which is worse than nothing. */
 export function companyLayerActive(cfg: RuntimeConfig): boolean {
-  return cfg.companyFilterEnabled && cfg.jinaApiKey.trim() !== "";
+  return cfg.companyFilterEnabled && cfg.tavilyApiKey.trim() !== "";
 }
 
 export function dossierIsFresh(row: Pick<CompanyRow, "research_status" | "dossier" | "researched_at">): boolean {
@@ -68,37 +70,43 @@ interface SearchResult {
   content: string;
 }
 
-async function jinaSearch(query: string, jinaApiKey: string): Promise<SearchResult[]> {
+async function tavilySearch(query: string, apiKey: string): Promise<SearchResult[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
   let res: Response;
   try {
-    res = await fetch(`https://s.jina.ai/?q=${encodeURIComponent(query)}`, {
-      headers: {
-        "Authorization": `Bearer ${jinaApiKey}`,
-        "Accept": "application/json",
-        "X-Retain-Images": "none",
-      },
+    res = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: apiKey,
+        query,
+        search_depth: "basic",
+        max_results: MAX_SEARCH_RESULTS,
+      }),
       signal: controller.signal,
     });
   } finally {
     clearTimeout(timer);
   }
-  if (res.status === 401 || res.status === 429) {
+  if (res.status === 401 || res.status === 403) {
     throw new Error(
-      `jina search rate-limited/unauthorized (HTTP ${res.status}) — check the Jina API key (free key at jina.ai)`,
+      `tavily search unauthorized (HTTP ${res.status}) — check the Tavily API key (free key at tavily.com)`,
     );
   }
-  if (!res.ok) throw new Error(`jina search failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+  if (res.status === 429) {
+    throw new Error("tavily search rate-limited (HTTP 429) — the free-tier monthly quota may be exhausted");
+  }
+  if (!res.ok) throw new Error(`tavily search failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
   const body = await res.json();
-  const data = Array.isArray(body?.data) ? body.data : [];
+  const data = Array.isArray(body?.results) ? body.results : [];
   const out: SearchResult[] = [];
   for (const item of data.slice(0, MAX_SEARCH_RESULTS)) {
     if (typeof item !== "object" || item === null) continue;
     const r = item as Record<string, unknown>;
     const title = typeof r.title === "string" ? r.title : "";
     const url = typeof r.url === "string" ? r.url : "";
-    const text = [r.description, r.content].filter((v) => typeof v === "string").join("\n");
+    const text = typeof r.content === "string" ? r.content : "";
     if (!title && !url && !text) continue;
     out.push({ title, url, content: text.slice(0, MAX_RESULT_CHARS) });
   }
@@ -158,7 +166,7 @@ const DOSSIER_SYSTEM_PROMPT = `You research companies for a job seeker deciding 
 Respond with JSON only, matching the schema.`;
 
 /**
- * Research one company: one Jina Search for live evidence, one LLM call to
+ * Research one company: one Tavily search for live evidence, one LLM call to
  * synthesize the dossier. `hint` (posting title + source page) disambiguates
  * common names. Zero search results still go to the LLM — a low-confidence
  * "uncertain" dossier IS the signal the seeker needs.
@@ -168,7 +176,7 @@ export async function researchCompany(
   hint: string,
   runtime: RuntimeConfig,
 ): Promise<CompanyDossier> {
-  const results = await jinaSearch(`"${displayName}" company funding employees`, runtime.jinaApiKey);
+  const results = await tavilySearch(`"${displayName}" company funding employees`, runtime.tavilyApiKey);
   const rendered = results.length === 0
     ? "(the web search returned no results for this company)"
     : results

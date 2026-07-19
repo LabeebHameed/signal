@@ -32,7 +32,7 @@ import type {
   WatchedPage,
 } from "../_shared/types.ts";
 import { resolveConfig } from "../_shared/config.ts";
-import { fetchPageContent, fetchViaJina, sha256 } from "../_shared/fetcher.ts";
+import { fetchPageContent, sha256 } from "../_shared/fetcher.ts";
 import { extractPostings } from "../_shared/llm.ts";
 import { judgePostings, profileHasContent } from "../_shared/judge.ts";
 import {
@@ -220,7 +220,7 @@ async function companyPending(
   if (error) return `load company queue failed: ${error.message}`;
   if (!rows || rows.length === 0) return null;
 
-  // Layer switched off (toggle or Jina key removed) since these rows were
+  // Layer switched off (toggle or Tavily key removed) since these rows were
   // queued — flush them straight to notification, like the filter-off flush.
   if (!companyLayerActive(cfg)) {
     const { error: flushError } = await db
@@ -409,13 +409,13 @@ async function pollPage(
     notified: 0,
   };
 
-  // 1. Fetch (preferring whichever source worked before)
-  let fetched = await fetchPageContent(page.url, page.fetch_source, cfg.jinaApiKey);
+  // 1. Fetch
+  const fetched = await fetchPageContent(page.url);
 
   // 2. Hash short-circuit: nothing changed → no extraction call. Still work
   // through any backlog left by earlier failures: unscreened postings (a
   // failed judge call) and queued notifications (a failed Telegram send).
-  let hash = await sha256(fetched.content);
+  const hash = await sha256(fetched.content);
   if (hash === page.last_content_hash) {
     const screenError = await screenPending(db, page, cfg, result);
     const companyError = await companyPending(db, page, cfg, result);
@@ -431,19 +431,7 @@ async function pollPage(
   }
 
   // 3. Extract postings via LLM
-  let postings = await extractPostings(fetched.content, page.url, cfg);
-
-  // If a direct fetch that previously yielded postings now yields none, the page
-  // may have switched to client-side rendering — retry once through Jina Reader.
-  if (postings.length === 0 && fetched.source === "direct" && page.first_crawl_done) {
-    const jina = await fetchViaJina(page.url, cfg.jinaApiKey);
-    const jinaPostings = await extractPostings(jina.content, page.url, cfg);
-    if (jinaPostings.length > 0) {
-      fetched = jina;
-      hash = await sha256(jina.content);
-      postings = jinaPostings;
-    }
-  }
+  const postings = await extractPostings(fetched.content, page.url, cfg);
 
   // 4. Diff by dedupe key — the unique(page_id, dedupe_key) constraint plus
   // ignoreDuplicates makes this return only genuinely-new rows. New rows on
@@ -502,7 +490,6 @@ async function pollPage(
     last_error: stepError ?? truncatedNote,
     failure_count: 0,
     first_crawl_done: true,
-    fetch_source: fetched.source,
   }).eq("id", page.id);
 
   if (stepError) result.error = stepError;

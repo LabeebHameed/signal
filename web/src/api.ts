@@ -5,7 +5,6 @@ export interface WatchedPage {
   url: string;
   label: string;
   active: boolean;
-  fetch_source: "direct" | "jina";
   last_checked_at: string | null;
   last_error: string | null;
   failure_count: number;
@@ -123,7 +122,7 @@ export interface Settings {
   llm_base_url: string;
   has_llm_api_key: boolean;
   has_telegram_bot_token: boolean;
-  has_jina_api_key: boolean;
+  has_tavily_api_key: boolean;
 }
 
 export interface BulkAddResult {
@@ -145,7 +144,7 @@ export interface SettingsUpdate {
   llm_base_url?: string;
   llm_api_key?: string;
   telegram_bot_token?: string;
-  jina_api_key?: string;
+  tavily_api_key?: string;
 }
 
 export function getToken(): string {

@@ -20,14 +20,14 @@ else is kept, visible, and silent — with the judge's full reasoning stored so
 no decision is a black box.
 
 **Company background layer (optional):** before a match is delivered, Signal
-can research the company behind it — one live web search (Jina Search, same
-key as Jina Reader) synthesized by the LLM into a cached dossier: what the
-company does, size, stage, recent funding, and a legitimacy assessment with
-concrete flags (fake-looking companies on job boards are a real thing). This
-layer **never blocks a posting** — an unverifiable or preference-clashing
-company still notifies, and the **Matches** page shows every qualifying
-posting as a card with the full company background and caution when there is
-one (the Telegram message itself stays short — see below).
+can research the company behind it — one live web search (Tavily) synthesized
+by the LLM into a cached dossier: what the company does, size, stage, recent
+funding, and a legitimacy assessment with concrete flags (fake-looking
+companies on job boards are a real thing). This layer **never blocks a
+posting** — an unverifiable or preference-clashing company still notifies,
+and the **Matches** page shows every qualifying posting as a card with the
+full company background and caution when there is one (the Telegram message
+itself stays short — see below).
 
 ## How it works
 
@@ -35,7 +35,7 @@ one (the Telegram message itself stays short — see below).
 pg_cron (every 15 min)
   └─> Edge Function: poll-pages
         for each active watched page:
-          1. fetch page content (direct fetch; Jina Reader fallback for JS-rendered pages)
+          1. fetch page content (plain HTTP fetch — JS-rendered SPA pages aren't supported)
           2. hash content → skip if unchanged since last check (no LLM cost)
           3. LLM extracts postings as JSON  [{title, url, company, location}]
           4. diff against `postings` table (dedupe key = posting URL, or title+company hash)
@@ -43,7 +43,7 @@ pg_cron (every 15 min)
              per page) → verdict + 0-100 score + per-dimension reasoning per posting
                matched  → company layer (if enabled), then queued for Telegram
                filtered → kept in the UI with its verdict, never notified
-          6. company layer (optional): research each match's company (Jina Search
+          6. company layer (optional): research each match's company (Tavily search
              + LLM dossier, cached 30 days) → ok, or warn with a caution — never blocked
           7. matched rows → one short Telegram message each: title, company
              (+ type when researched), location, link — the full judge
@@ -96,7 +96,7 @@ update settings set admin_token = '<random string, e.g. openssl rand -hex 24>';
 ```
 
 Everything else (LLM provider/model/key, Telegram bot token + chat ID, optional
-Jina key) is entered in the web UI → **Settings**.
+Tavily key) is entered in the web UI → **Settings**.
 
 ### 3. Web UI
 
@@ -141,11 +141,11 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   do). Use **Send test message** in Settings to verify instantly. Failed
   notifications aren't lost — they queue (`pending` in the postings list) and
   retry on the next poll once Telegram works.
-- **"direct fetch failed: HTTP 403" / connection errors**: the site blocks
-  datacenter traffic (anti-bot). The poller automatically retries through Jina
-  Reader, but anonymous Jina access is heavily rate-limited — set the **Jina
-  Reader API key** in Settings (free at [jina.ai](https://jina.ai)) and these
-  sites will work.
+- **"fetch failed: HTTP 403" / connection errors**: the site blocks datacenter
+  traffic (anti-bot) or requires JavaScript to render its content. Signal only
+  does plain HTTP fetches — there's no rendering fallback — so these pages
+  stay unfetchable; swap in a URL that serves the listing as static HTML
+  (many boards have one, e.g. a Greenhouse/Lever-hosted mirror) if available.
 
 ## How filtering works
 
@@ -182,7 +182,7 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 
 ## How the company layer works
 
-- **Opt-in, and needs a Jina key** (Profile page toggle): research without
+- **Opt-in, and needs a Tavily key** (Profile page toggle): research without
   live search evidence would just be the LLM guessing, so without a key the
   layer stays inactive and matches notify directly.
 - **Matched postings only.** Companies are researched after a posting passes
@@ -213,9 +213,9 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   notified (otherwise adding a page would flood you with every existing job).
   Postings that appear after that are screened and, if they qualify, notified.
 - **Max 20 notifications per page per run**, then a single "…and N more" message.
-- **JS-rendered pages**: if a direct fetch returns an empty shell (or stops
-  yielding postings), the poller retries through [Jina Reader](https://jina.ai/reader/)
-  and remembers which method worked for next time (`fetch_source` column).
+- **JS-rendered pages aren't supported**: Signal only does a plain HTTP fetch,
+  no rendering fallback — a page that needs JavaScript to show its postings
+  will fetch as an empty shell and simply show no new postings.
 - **Failures don't stop the run**: a broken page records `last_error` and
   `failure_count` (visible in the UI) and the poller moves on.
 - Poll manually any time:

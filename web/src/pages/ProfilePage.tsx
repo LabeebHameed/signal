@@ -234,7 +234,7 @@ export default function ProfilePage() {
             When on, Signal researches the company behind every matched posting before notifying you — is it a real
             operating company, what does it do, its size, stage, and recent funding. Nothing gets hidden: a company
             that can't be verified or clashes with your preferences is delivered with a clear caution and the full
-            background on the Matches page. Uses your Jina API key for web search (spends Jina quota).
+            background on the Matches page. Uses your Tavily API key for web search (spends Tavily quota).
           </p>
           <label className="toggle-row">
             <input
@@ -244,9 +244,9 @@ export default function ProfilePage() {
             />
             Research companies behind matched postings
           </label>
-          {settings.company_filter_enabled && !settings.has_jina_api_key && (
+          {settings.company_filter_enabled && !settings.has_tavily_api_key && (
             <p className="error">
-              Company checks stay inactive until a Jina API key is set in Settings (free at jina.ai).
+              Company checks stay inactive until a Tavily API key is set in Settings (free at tavily.com).
             </p>
           )}
         </section>

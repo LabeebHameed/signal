@@ -129,7 +129,6 @@ export interface WatchedPage {
   url: string;
   label: string;
   active: boolean;
-  fetch_source: "direct" | "jina";
   last_content_hash: string | null;
   last_checked_at: string | null;
   last_error: string | null;
@@ -153,7 +152,7 @@ export interface Settings {
   llm_api_key: string;
   llm_base_url: string;
   telegram_bot_token: string;
-  jina_api_key: string;
+  tavily_api_key: string;
 }
 
 export interface RuntimeConfig {
@@ -164,7 +163,7 @@ export interface RuntimeConfig {
   llmBaseUrl: string;
   telegramBotToken: string;
   telegramChatId: string;
-  jinaApiKey: string;
+  tavilyApiKey: string;
   filterProfile: FilterProfile;
   filterMode: FilterMode;
   companyFilterEnabled: boolean;

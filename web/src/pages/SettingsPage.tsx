@@ -20,7 +20,7 @@ export default function SettingsPage() {
   }, [data, settings]);
 
   // Secret inputs are write-only: the server never echoes stored values back.
-  const [secrets, setSecrets] = useState({ llm_api_key: "", telegram_bot_token: "", jina_api_key: "" });
+  const [secrets, setSecrets] = useState({ llm_api_key: "", telegram_bot_token: "", tavily_api_key: "" });
   const [saving, setSaving] = useState(false);
   const [tgTest, setTgTest] = useState<{ status: "idle" | "sending" | "ok" | "fail"; message?: string }>({
     status: "idle",
@@ -49,11 +49,11 @@ export default function SettingsPage() {
         llm_base_url: settings.llm_base_url,
         ...(secrets.llm_api_key.trim() ? { llm_api_key: secrets.llm_api_key.trim() } : {}),
         ...(secrets.telegram_bot_token.trim() ? { telegram_bot_token: secrets.telegram_bot_token.trim() } : {}),
-        ...(secrets.jina_api_key.trim() ? { jina_api_key: secrets.jina_api_key.trim() } : {}),
+        ...(secrets.tavily_api_key.trim() ? { tavily_api_key: secrets.tavily_api_key.trim() } : {}),
       });
       setSettings(updated);
       queryClient.setQueryData(["settings"], updated);
-      setSecrets({ llm_api_key: "", telegram_bot_token: "", jina_api_key: "" });
+      setSecrets({ llm_api_key: "", telegram_bot_token: "", tavily_api_key: "" });
       toast.show("Settings saved");
     } catch (err) {
       toast.show(err instanceof Error ? err.message : String(err), "error");
@@ -182,18 +182,18 @@ export default function SettingsPage() {
 
         <section className="card">
           <h2>
-            Jina <span className="hint">(optional)</span>
+            Tavily <span className="hint">(optional)</span>
           </h2>
           <label>
             API key{" "}
             <span className="hint">
-              powers JS-heavy page fetching and the company background checks (see Profile) — free at jina.ai
+              powers the company background checks (see Profile) — free at tavily.com
             </span>
             <input
               type="password"
-              value={secrets.jina_api_key}
-              onChange={(e) => setSecrets({ ...secrets, jina_api_key: e.target.value })}
-              placeholder={secretPlaceholder(settings.has_jina_api_key)}
+              value={secrets.tavily_api_key}
+              onChange={(e) => setSecrets({ ...secrets, tavily_api_key: e.target.value })}
+              placeholder={secretPlaceholder(settings.has_tavily_api_key)}
             />
           </label>
         </section>

@@ -165,6 +165,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       ...options.headers,
     },
   });
+  // A misconfigured VITE_API_URL (empty, or pointing at the web app's own
+  // domain) hits the SPA's rewrite instead of the api function: it "succeeds"
+  // with a 200 and an HTML body. Treating that as JSON silently produces {}
+  // and lets a shape mismatch crash deep in a component instead of here.
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      `Expected JSON from the API but got "${contentType || "no content-type"}" (HTTP ${res.status}). ` +
+        "VITE_API_URL is likely misconfigured or not pointing at a live api function.",
+    );
+  }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(body.error ?? `HTTP ${res.status}`);

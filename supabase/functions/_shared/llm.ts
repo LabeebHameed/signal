@@ -29,6 +29,7 @@ const POSTINGS_SCHEMA = {
           location: { type: "string" },
           posted_at: { type: "string" },
           posted_text: { type: "string" },
+          compensation: { type: "string" },
         },
         required: ["title"],
         additionalProperties: false,
@@ -48,10 +49,11 @@ Return every individual job posting visible in the content. For each posting inc
 - location: the location(s) shown for the posting, verbatim
 - posted_text: if the page shows when the job was posted (e.g. "2 days ago", "Posted Mar 3", "3h"), that text verbatim
 - posted_at: the same posted date as an ISO date (YYYY-MM-DD), computed from today's date when the page shows a relative time. Omit if the page shows no posted date — never guess.
+- compensation: pay/salary as shown for the posting, verbatim (e.g. "$150K - $200K", "$45/hr"). Omit if the page shows no pay for this posting — never estimate or guess.
 
 Do NOT filter, judge, or deduplicate beyond obvious exact repeats. Do NOT invent postings or fields that are not in the content. Navigation links, department headers, and generic buttons are not postings.
 
-Respond with JSON only, matching: {"postings": [{"title": "...", "url": "...", "company": "...", "location": "...", "posted_at": "...", "posted_text": "..."}]}
+Respond with JSON only, matching: {"postings": [{"title": "...", "url": "...", "company": "...", "location": "...", "posted_at": "...", "posted_text": "...", "compensation": "..."}]}
 If the content contains no job postings, respond with {"postings": []}.`;
 
 interface LlmConfig {
@@ -136,6 +138,7 @@ function validatePostings(parsed: unknown): ExtractedPosting[] {
       location: typeof p.location === "string" && p.location.trim() !== "" ? p.location.trim() : undefined,
       posted_at: postedAt,
       posted_text: typeof p.posted_text === "string" && p.posted_text.trim() !== "" ? p.posted_text.trim() : undefined,
+      compensation: typeof p.compensation === "string" && p.compensation.trim() !== "" ? p.compensation.trim() : undefined,
     });
   }
   return out;

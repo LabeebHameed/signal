@@ -363,7 +363,7 @@ async function notifyPending(
   const { data: pending, error } = await db
     .from("postings")
     .select(
-      "id, title, url, company, location, companies(display_name, dossier)",
+      "id, title, url, company, location, compensation, companies(display_name, dossier)",
     )
     .eq("page_id", page.id)
     .eq("pending_notify", true)
@@ -453,6 +453,7 @@ async function pollPage(
       location: p.location ?? null,
       posted_at: p.posted_at ?? null,
       posted_text: p.posted_text ?? null,
+      compensation: p.compensation ?? null,
       pending_notify: false,
       filter_status: page.first_crawl_done ? "pending" : "skipped",
       raw: p,

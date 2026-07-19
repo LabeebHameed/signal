@@ -65,18 +65,18 @@ export interface CompanyInfo {
 
 /**
  * Deliberately minimal: title, company (+ type when researched), location,
- * and a link. The judge's full reasoning and the company dossier live on
- * the Matches page — Telegram is just the ping to go look.
+ * pay, and a link. The judge's full reasoning and the company dossier live
+ * on the Matches page — Telegram is just the ping to go look.
  */
 export function formatPostingMessage(posting: {
   title: string;
   url?: string | null;
   company?: string | null;
   location?: string | null;
+  compensation?: string | null;
 }, pageLabel: string, companyInfo?: CompanyInfo | null): string {
   const lines: string[] = [];
-  lines.push(`\u{1F514} <b>New job posting</b>`);
-  lines.push(escapeHtml(posting.title));
+  lines.push(`\u{1F514} ${escapeHtml(posting.title)}`);
   lines.push("");
 
   const companyName = companyInfo?.display_name || posting.company;
@@ -85,11 +85,13 @@ export function formatPostingMessage(posting: {
     lines.push(`\u{1F3E2} ${escapeHtml(companyName)}${type ? ` — ${escapeHtml(type)}` : ""}`);
   }
   if (posting.location) lines.push(`\u{1F4CD} ${escapeHtml(posting.location)}`);
+  if (posting.compensation) lines.push(`\u{1F4B0} ${escapeHtml(posting.compensation)}`);
 
+  lines.push("");
   if (posting.url) {
-    lines.push(`\u{1F517} ${escapeHtml(pageLabel)} - <a href="${escapeAttr(posting.url)}">Link</a>`);
+    lines.push(`${escapeHtml(pageLabel)} - <a href="${escapeAttr(posting.url)}">See Job Post</a>`);
   } else if (pageLabel) {
-    lines.push(`\u{1F517} ${escapeHtml(pageLabel)}`);
+    lines.push(escapeHtml(pageLabel));
   }
 
   return lines.join("\n");

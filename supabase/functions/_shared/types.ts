@@ -7,6 +7,8 @@ export interface ExtractedPosting {
   posted_at?: string;
   /** The posted-date text verbatim as shown on the page, e.g. "2 days ago". */
   posted_text?: string;
+  /** Pay/compensation as shown on the page, verbatim (e.g. "$150K - $200K"). */
+  compensation?: string;
 }
 
 /**

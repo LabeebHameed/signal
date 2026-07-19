@@ -93,6 +93,7 @@ export function formatPostingMessage(posting: {
   } else if (pageLabel) {
     lines.push(escapeHtml(pageLabel));
   }
+  lines.push("_________________________________");
 
   return lines.join("\n");
 }

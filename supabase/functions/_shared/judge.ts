@@ -19,6 +19,14 @@ export interface ScreenablePosting {
   location?: string | null;
   posted_at?: string | null;
   posted_text?: string | null;
+  compensation?: string | null;
+}
+
+/** Recent seeker feedback (postings.user_status), most-recent first — used
+ * to calibrate borderline judgment calls without overriding the profile. */
+export interface JudgeCalibration {
+  interested: string[];
+  notInterested: string[];
 }
 
 const PROFILE_LABELS: Record<keyof FilterProfile, string> = {
@@ -108,6 +116,7 @@ Rules:
 - score: overall fit 0–100 given the evidence (100 = ideal, 50 = coin flip, 0 = unrelated). Score and verdict must agree.
 - summary: one or two plain sentences naming the decisive factors. The seeker reads this to trust — or correct — the decision, so be concrete, not generic.
 - dimensions: include an entry for each dimension the profile expresses a preference about; skip dimensions the profile never mentions. Keep notes short.
+- If recent feedback from this seeker is provided below, use it only to calibrate genuinely borderline calls (e.g. several "not interested" marks on similar senior IC roles at large companies suggest leaning mismatch on a new one just like them) — it never overrides a clear, direct read of the stated profile, and a single data point is never enough to shift a verdict.
 
 Judge each posting independently, using its [id]. Respond with JSON only:
 {"verdicts": [{"id": 0, "verdict": "match", "score": 85, "summary": "...", "dealbreaker": null, "dimensions": [{"name": "role", "fit": "strong", "note": "..."}]}]}
@@ -126,10 +135,24 @@ function renderPosting(p: ScreenablePosting, id: number): string {
   const lines = [`[${id}]`, `Title: ${p.title}`];
   if (p.company) lines.push(`Company: ${p.company}`);
   if (p.location) lines.push(`Location: ${p.location}`);
+  if (p.compensation) lines.push(`Compensation: ${p.compensation}`);
   if (p.url) lines.push(`URL: ${p.url}`);
   const posted = p.posted_text || p.posted_at;
   if (posted) lines.push(`Posted: ${posted}`);
   return lines.join("\n");
+}
+
+function renderCalibration(calibration: JudgeCalibration): string | null {
+  const lines: string[] = [];
+  if (calibration.interested.length > 0) {
+    lines.push(`Marked interested (good matches): ${calibration.interested.join("; ")}`);
+  }
+  if (calibration.notInterested.length > 0) {
+    lines.push(`Marked not interested (bad matches): ${calibration.notInterested.join("; ")}`);
+  }
+  return lines.length > 0
+    ? `RECENT FEEDBACK FROM THIS SEEKER (calibration only, see rules above):\n${lines.join("\n")}`
+    : null;
 }
 
 function asVerdict(item: unknown, count: number): { id: number; verdict: PostingVerdict } | null {
@@ -182,11 +205,13 @@ export async function judgePostings(
   profile: FilterProfile,
   pageLabel: string,
   runtime: RuntimeConfig,
+  calibration?: JudgeCalibration,
 ): Promise<Map<number, PostingVerdict>> {
-  const user = [
-    `THE SEEKER'S PROFILE:\n${renderProfile(profile)}`,
-    `POSTINGS (found on "${pageLabel}"):\n\n${postings.map(renderPosting).join("\n\n")}`,
-  ].join("\n\n");
+  const parts = [`THE SEEKER'S PROFILE:\n${renderProfile(profile)}`];
+  const calibrationBlock = calibration ? renderCalibration(calibration) : null;
+  if (calibrationBlock) parts.push(calibrationBlock);
+  parts.push(`POSTINGS (found on "${pageLabel}"):\n\n${postings.map(renderPosting).join("\n\n")}`);
+  const user = parts.join("\n\n");
 
   const parsed = await llmJson(runtime, {
     system: JUDGE_SYSTEM_PROMPT,

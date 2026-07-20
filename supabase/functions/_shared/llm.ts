@@ -53,6 +53,8 @@ Return every individual job posting visible in the content. For each posting inc
 
 Do NOT filter, judge, or deduplicate beyond obvious exact repeats. Do NOT invent postings or fields that are not in the content. Navigation links, department headers, and generic buttons are not postings.
 
+Sponsored/ad units are not postings either — skip them even when they're styled like a listing. Tells: a link path containing "/ads/", "/sponsored/", "/promo/", or "click"-tracking segments (e.g. "/listing_ads/13/click"); ad-copy phrasing instead of a real job title ("Remote Tech Jobs Paying $130k to $250k", "Post a job", "Hire remotely"); no identifiable single employer. A genuine posting names one specific role at one specific (or "confidential"/"stealth") employer.
+
 Respond with JSON only, matching: {"postings": [{"title": "...", "url": "...", "company": "...", "location": "...", "posted_at": "...", "posted_text": "...", "compensation": "..."}]}
 If the content contains no job postings, respond with {"postings": []}.`;
 

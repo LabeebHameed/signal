@@ -14,14 +14,20 @@
 //                                 when sent as non-empty strings. filter_profile
 //                                 is sanitized to the known profile fields;
 //                                 filter_mode must be off|balanced|strict.
+//                                 blocked_companies is free text (one company per
+//                                 line or comma-separated); min_score is 0-100.
 //   POST   /profile/expand        { statement } → { profile }: expand the user's
 //                                 one-sentence "what I'm looking for" into a
 //                                 structured filter profile via the LLM. Preview
 //                                 only — nothing is saved (use PUT /settings).
 //   GET    /postings              postings with filter + sort + pagination:
-//                                 ?limit=50&offset=0&sort=first_seen_at|posted_at|title|company|filter_score
+//                                 ?limit=50&offset=0&sort=first_seen_at|posted_at|title|company|filter_score|notified_at
 //                                 &order=asc|desc&status=pending|matched|filtered|skipped
+//                                 &user_status=none|interested|not_interested|applied|interviewing|offer|rejected
 //                                 → { items, total }
+//   PATCH  /postings/:id          { user_status } record what the seeker did with a
+//                                 posting (interested/not_interested/applied/...) —
+//                                 feeds back into the judge's calibration context
 //   POST   /poll                  trigger a poll run in the background, returns
 //                                 { started: true } immediately — watch /pages
 //                                 and /postings for results as they land
@@ -33,7 +39,7 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import type { FilterProfile, Settings } from "../_shared/types.ts";
+import type { FilterProfile, Settings, UserStatus } from "../_shared/types.ts";
 import { FILTER_PROFILE_KEYS } from "../_shared/types.ts";
 import { resolveConfig } from "../_shared/config.ts";
 import { deriveLabel } from "../_shared/label.ts";
@@ -61,6 +67,8 @@ function maskSettings(s: Settings) {
     filter_profile: s.filter_profile ?? {},
     filter_mode: s.filter_mode ?? "balanced",
     company_filter_enabled: s.company_filter_enabled ?? false,
+    blocked_companies: s.blocked_companies ?? "",
+    min_score: s.min_score ?? 0,
     telegram_chat_id: s.telegram_chat_id,
     llm_provider: s.llm_provider,
     llm_model: s.llm_model,
@@ -201,11 +209,23 @@ Deno.serve(async (req: Request) => {
       const body = await req.json();
       const patch: Record<string, unknown> = {};
       // Non-secret fields: any provided string is applied as-is.
-      for (const field of ["telegram_chat_id", "llm_provider", "llm_model", "llm_base_url", "profile_input"]) {
+      for (
+        const field of [
+          "telegram_chat_id",
+          "llm_provider",
+          "llm_model",
+          "llm_base_url",
+          "profile_input",
+          "blocked_companies",
+        ]
+      ) {
         if (typeof body[field] === "string") patch[field] = body[field].trim();
       }
       if (typeof body.company_filter_enabled === "boolean") {
         patch.company_filter_enabled = body.company_filter_enabled;
+      }
+      if (typeof body.min_score === "number" && Number.isFinite(body.min_score)) {
+        patch.min_score = Math.min(100, Math.max(0, Math.round(body.min_score)));
       }
       // Job filter: the profile is rebuilt from the known fields only (a PUT
       // replaces the whole profile — empty/omitted fields clear).
@@ -251,18 +271,22 @@ Deno.serve(async (req: Request) => {
       const params = new URL(req.url).searchParams;
       const limit = Math.min(Number(params.get("limit")) || 50, 200);
       const offset = Math.max(Number(params.get("offset")) || 0, 0);
-      const sortable = ["first_seen_at", "posted_at", "title", "company", "filter_score"];
+      const sortable = ["first_seen_at", "posted_at", "title", "company", "filter_score", "notified_at", "user_status_at"];
       const sort = sortable.includes(params.get("sort") ?? "") ? params.get("sort")! : "first_seen_at";
       const ascending = params.get("order") === "asc";
       const status = params.get("status") ?? "";
+      const userStatus = params.get("user_status") ?? "";
       let query = db
         .from("postings")
         .select(
-          "id, title, url, company, location, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_score, filter_verdict, company_status, company_verdict, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
+          "id, title, url, company, location, compensation, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_score, filter_verdict, company_status, company_verdict, user_status, user_status_at, duplicate_of, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
           { count: "exact" },
         );
       if (["pending", "matched", "filtered", "skipped"].includes(status)) {
         query = query.eq("filter_status", status);
+      }
+      if (["none", "interested", "not_interested", "applied", "interviewing", "offer", "rejected"].includes(userStatus)) {
+        query = query.eq("user_status", userStatus);
       }
       const { data, error, count } = await query
         .order(sort, { ascending, nullsFirst: false })
@@ -270,6 +294,30 @@ Deno.serve(async (req: Request) => {
         .range(offset, offset + limit - 1);
       if (error) throw error;
       return json({ items: data, total: count ?? 0 });
+    }
+
+    if (resource === "postings" && resourceId && req.method === "PATCH") {
+      const body = await req.json();
+      const validStatuses: UserStatus[] = [
+        "none",
+        "interested",
+        "not_interested",
+        "applied",
+        "interviewing",
+        "offer",
+        "rejected",
+      ];
+      if (!validStatuses.includes(body.user_status)) {
+        return json({ error: `user_status must be one of: ${validStatuses.join(", ")}` }, 400);
+      }
+      const { data, error } = await db
+        .from("postings")
+        .update({ user_status: body.user_status, user_status_at: new Date().toISOString() })
+        .eq("id", resourceId)
+        .select()
+        .single();
+      if (error) throw error;
+      return json(data);
     }
 
     if (resource === "profile" && resourceId === "expand" && req.method === "POST") {
@@ -323,10 +371,13 @@ Deno.serve(async (req: Request) => {
       // killed mid-run — silently skipping every page after the cutoff. The
       // web UI's live polling (see /pages, /postings) picks up progress as it
       // lands instead of waiting on this response.
+      // force: true — a manual "Check now" always checks every active page,
+      // ignoring each page's adaptive due-time (unlike the scheduled cron
+      // tick, which only processes pages that are actually due).
       const res = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/poll-pages`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-token": cfg.adminToken },
-        body: JSON.stringify({ background: true }),
+        body: JSON.stringify({ background: true, force: true }),
       });
       return json(await res.json(), res.status);
     }

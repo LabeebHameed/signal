@@ -136,6 +136,21 @@ export interface WatchedPage {
   last_error: string | null;
   failure_count: number;
   first_crawl_done: boolean;
+  /** Set while a poll run is actively processing this page; guards against
+   * an overlapping run (cron + "Check now", or two chained batches)
+   * double-processing — and double-notifying — the same page. Stale claims
+   * (see CLAIM_STALE_MS in poll-pages) are reclaimable. */
+  poll_claimed_at: string | null;
+  /** Which fetch strategy last produced usable content for this page — see
+   * FetchStrategy in _shared/fetcher.ts and AtsStrategy in _shared/ats.ts.
+   * Tried first on the next poll instead of re-discovering the winner. */
+  fetch_strategy: string | null;
+  /** Current steady-state check interval in minutes — doubles on repeated
+   * unchanged polls (cap 6h), resets to 15 on a real content change. */
+  check_interval_minutes: number;
+  /** When this page is next due for a scheduled (cron) check; null means
+   * due now. A manual "Check now" ignores this and forces every page. */
+  next_check_at: string | null;
 }
 
 // Full settings row, including secret columns. Only ever read via the
@@ -147,6 +162,12 @@ export interface Settings {
   filter_profile: FilterProfile;
   filter_mode: FilterMode;
   company_filter_enabled: boolean;
+  /** Newline/comma-separated company names to filter out deterministically,
+   * before the postings from them ever reach the LLM judge. */
+  blocked_companies: string;
+  /** Minimum judge score (0-100) required to notify, layered on top of the
+   * off/balanced/strict verdict mode. */
+  min_score: number;
   telegram_chat_id: string;
   admin_token: string;
   llm_provider: string;
@@ -169,4 +190,17 @@ export interface RuntimeConfig {
   filterProfile: FilterProfile;
   filterMode: FilterMode;
   companyFilterEnabled: boolean;
+  blockedCompanies: string;
+  minScore: number;
 }
+
+/** What the seeker did with a posting after seeing it — feeds straight back
+ * into the judge's calibration context on every future screening call. */
+export type UserStatus =
+  | "none"
+  | "interested"
+  | "not_interested"
+  | "applied"
+  | "interviewing"
+  | "offer"
+  | "rejected";

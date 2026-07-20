@@ -1,4 +1,4 @@
-import type { CompanyDossier } from "./types.ts";
+import type { CompanyDossier, PostingVerdict } from "./types.ts";
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -64,9 +64,11 @@ export interface CompanyInfo {
 }
 
 /**
- * Deliberately minimal: title, company (+ type when researched), location,
- * pay, and a link. The judge's full reasoning and the company dossier live
- * on the Matches page — Telegram is just the ping to go look.
+ * Deliberately minimal: title, why it matched (score + the judge's own
+ * summary — every notification says why, per the product vision), company
+ * (+ type when researched), location, pay, and a link. The full
+ * per-dimension breakdown and company dossier live on the Inbox page —
+ * Telegram is just the ping to go look.
  */
 export function formatPostingMessage(posting: {
   title: string;
@@ -74,10 +76,18 @@ export function formatPostingMessage(posting: {
   company?: string | null;
   location?: string | null;
   compensation?: string | null;
+  filter_score?: number | null;
+  filter_verdict?: Pick<PostingVerdict, "summary"> | null;
 }, pageLabel: string, companyInfo?: CompanyInfo | null): string {
   const lines: string[] = [];
   lines.push(`\u{1F514} ${escapeHtml(posting.title)}`);
   lines.push("");
+
+  if (posting.filter_verdict?.summary) {
+    const score = posting.filter_score != null ? `${posting.filter_score}/100 — ` : "";
+    lines.push(`\u{1F3AF} ${score}${escapeHtml(posting.filter_verdict.summary)}`);
+    lines.push("");
+  }
 
   const companyName = companyInfo?.display_name || posting.company;
   if (companyName) {

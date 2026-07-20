@@ -68,14 +68,6 @@ const CLAIM_STALE_MS = 3 * 60_000;
 // reposts across sibling boards within the same hiring window, short enough
 // that a genuinely new opening months later still gets through.
 const CONTENT_DEDUPE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
-// Adaptive check cadence: the interval a page settles into starts here,
-// doubles on every consecutive unchanged poll up to the cap, and resets
-// here the moment content actually changes.
-const BASE_INTERVAL_MINUTES = 15;
-const MAX_UNCHANGED_INTERVAL_MINUTES = 6 * 60;
-// Failing pages back off exponentially instead of being retried every cron
-// tick forever — capped so a page that recovers is still found within a day.
-const MAX_FAILURE_BACKOFF_MINUTES = 24 * 60;
 // Postings screened per page per run, all in one LLM call. Leftovers stay
 // filter_status='pending' and are picked up by the next run.
 const SCREEN_BATCH = 20;
@@ -540,16 +532,6 @@ async function fetchPageForPolling(page: WatchedPage): Promise<PageContent> {
   };
 }
 
-function nextCheckAfter(minutes: number): string {
-  return new Date(Date.now() + minutes * 60_000).toISOString();
-}
-
-/** Exponential backoff for a page that's failing to fetch/extract —
- * failureCount is the count *after* this failure (>= 1). */
-function failureBackoffMinutes(failureCount: number): number {
-  return Math.min(BASE_INTERVAL_MINUTES * 2 ** failureCount, MAX_FAILURE_BACKOFF_MINUTES);
-}
-
 async function pollPage(
   db: SupabaseClient,
   page: WatchedPage,
@@ -579,15 +561,12 @@ async function pollPage(
     const screenError = await screenPending(db, page, cfg, result);
     const companyError = await companyPending(db, page, cfg, result);
     const notifyError = await notifyPending(db, page, cfg, result);
-    const interval = Math.min(page.check_interval_minutes * 2, MAX_UNCHANGED_INTERVAL_MINUTES);
     await db.from("watched_pages").update({
       last_checked_at: new Date().toISOString(),
       last_error: screenError ?? companyError ?? notifyError,
       failure_count: 0,
       fetch_strategy: fetched.strategy,
       poll_claimed_at: null,
-      check_interval_minutes: interval,
-      next_check_at: nextCheckAfter(interval),
     }).eq("id", page.id);
     result.status = "unchanged";
     if (screenError ?? companyError ?? notifyError) result.error = (screenError ?? companyError ?? notifyError)!;
@@ -673,8 +652,6 @@ async function pollPage(
     first_crawl_done: true,
     fetch_strategy: fetched.strategy,
     poll_claimed_at: null,
-    check_interval_minutes: BASE_INTERVAL_MINUTES,
-    next_check_at: nextCheckAfter(BASE_INTERVAL_MINUTES),
   }).eq("id", page.id);
 
   if (stepError) result.error = stepError;
@@ -702,18 +679,13 @@ async function loadPagesByIds(db: SupabaseClient, ids: string[]): Promise<Watche
  * a healthy page settled on a 6h interval isn't refetched every 15 min. A
  * forced run (the UI's "Check now") ignores due-ness entirely.
  */
-async function loadWorklist(db: SupabaseClient, force: boolean): Promise<WatchedPage[]> {
+async function loadWorklist(db: SupabaseClient): Promise<WatchedPage[]> {
   const staleThreshold = new Date(Date.now() - CLAIM_STALE_MS).toISOString();
-  let query = db
+  const { data, error } = await db
     .from("watched_pages")
     .select("*")
     .eq("active", true)
-    .or(`poll_claimed_at.is.null,poll_claimed_at.lt.${staleThreshold}`);
-  if (!force) {
-    const now = new Date().toISOString();
-    query = query.or(`next_check_at.is.null,next_check_at.lte.${now}`);
-  }
-  const { data, error } = await query
+    .or(`poll_claimed_at.is.null,poll_claimed_at.lt.${staleThreshold}`)
     .order("last_checked_at", { ascending: true, nullsFirst: true })
     .order("created_at");
   if (error) throw new Error(`load pages failed: ${error.message}`);
@@ -745,9 +717,8 @@ async function runPoll(
   db: SupabaseClient,
   cfg: RuntimeConfig,
   pageIds?: string[],
-  force = false,
 ): Promise<{ pages: number; results: PageResult[] }> {
-  const worklist = pageIds ? await loadPagesByIds(db, pageIds) : await loadWorklist(db, force);
+  const worklist = pageIds ? await loadPagesByIds(db, pageIds) : await loadWorklist(db);
   const candidateBatch = worklist.slice(0, BATCH_SIZE);
   const remaining = worklist.slice(BATCH_SIZE);
   const batch = await claimBatch(db, candidateBatch);
@@ -767,7 +738,6 @@ async function runPoll(
         last_error: message.slice(0, 500),
         failure_count: newFailureCount,
         poll_claimed_at: null,
-        next_check_at: nextCheckAfter(failureBackoffMinutes(newFailureCount)),
       }).eq("id", page.id);
       results.push({
         url: page.url,
@@ -788,7 +758,7 @@ async function runPoll(
       await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/poll-pages`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-token": cfg.adminToken },
-        body: JSON.stringify({ background: true, pageIds: remaining.map((p) => p.id), force }),
+        body: JSON.stringify({ background: true, pageIds: remaining.map((p) => p.id) }),
       });
     } catch (e) {
       console.error("failed to chain next poll batch:", e);
@@ -822,12 +792,10 @@ Deno.serve(async (req: Request) => {
   }
 
   let background = false;
-  let force = false;
   let pageIds: string[] | undefined;
   try {
     const body = await req.json();
     background = body?.background === true;
-    force = body?.force === true;
     if (Array.isArray(body?.pageIds)) {
       pageIds = body.pageIds.filter((id: unknown): id is string => typeof id === "string");
     }
@@ -837,7 +805,7 @@ Deno.serve(async (req: Request) => {
 
   if (background && typeof EdgeRuntime !== "undefined") {
     EdgeRuntime.waitUntil(
-      runPoll(db, cfg, pageIds, force).catch((e) => console.error("background poll failed:", e)),
+      runPoll(db, cfg, pageIds).catch((e) => console.error("background poll failed:", e)),
     );
     return new Response(JSON.stringify({ started: true }), {
       status: 202,
@@ -846,7 +814,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const summary = await runPoll(db, cfg, pageIds, force);
+    const summary = await runPoll(db, cfg, pageIds);
     return new Response(JSON.stringify(summary), {
       headers: { "Content-Type": "application/json" },
     });

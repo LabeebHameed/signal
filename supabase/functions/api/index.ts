@@ -23,7 +23,6 @@
 //   GET    /postings              postings with filter + sort + pagination:
 //                                 ?limit=50&offset=0&sort=first_seen_at|posted_at|title|company|filter_score|notified_at
 //                                 &order=asc|desc&status=pending|matched|filtered|skipped
-//                                 &user_status=none|interested|not_interested|applied|interviewing|offer|rejected
 //                                 → { items, total }
 //   PATCH  /postings/:id          { user_status } record what the seeker did with a
 //                                 posting (interested/not_interested/applied/...) —
@@ -271,11 +270,10 @@ Deno.serve(async (req: Request) => {
       const params = new URL(req.url).searchParams;
       const limit = Math.min(Number(params.get("limit")) || 50, 200);
       const offset = Math.max(Number(params.get("offset")) || 0, 0);
-      const sortable = ["first_seen_at", "posted_at", "title", "company", "filter_score", "notified_at", "user_status_at"];
+      const sortable = ["first_seen_at", "posted_at", "title", "company", "filter_score", "notified_at"];
       const sort = sortable.includes(params.get("sort") ?? "") ? params.get("sort")! : "first_seen_at";
       const ascending = params.get("order") === "asc";
       const status = params.get("status") ?? "";
-      const userStatus = params.get("user_status") ?? "";
       let query = db
         .from("postings")
         .select(
@@ -284,9 +282,6 @@ Deno.serve(async (req: Request) => {
         );
       if (["pending", "matched", "filtered", "skipped"].includes(status)) {
         query = query.eq("filter_status", status);
-      }
-      if (["none", "interested", "not_interested", "applied", "interviewing", "offer", "rejected"].includes(userStatus)) {
-        query = query.eq("user_status", userStatus);
       }
       const { data, error, count } = await query
         .order(sort, { ascending, nullsFirst: false })
@@ -371,13 +366,10 @@ Deno.serve(async (req: Request) => {
       // killed mid-run — silently skipping every page after the cutoff. The
       // web UI's live polling (see /pages, /postings) picks up progress as it
       // lands instead of waiting on this response.
-      // force: true — a manual "Check now" always checks every active page,
-      // ignoring each page's adaptive due-time (unlike the scheduled cron
-      // tick, which only processes pages that are actually due).
       const res = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/poll-pages`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-admin-token": cfg.adminToken },
-        body: JSON.stringify({ background: true, force: true }),
+        body: JSON.stringify({ background: true }),
       });
       return json(await res.json(), res.status);
     }

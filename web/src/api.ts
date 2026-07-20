@@ -11,10 +11,6 @@ export interface WatchedPage {
   first_crawl_done: boolean;
   /** What last produced usable content: direct / direct-alt / proxy:pure / greenhouse / lever / ashby / rss. */
   fetch_strategy: string | null;
-  /** Current steady-state check interval in minutes — doubles when unchanged (cap 6h), resets to 15 on a real change. */
-  check_interval_minutes: number;
-  /** When this page is next due for a scheduled check; null means due now. */
-  next_check_at: string | null;
 }
 
 /** The job profile the filter judges postings against — all optional free text. */
@@ -125,8 +121,7 @@ export type PostingSort =
   | "title"
   | "company"
   | "filter_score"
-  | "notified_at"
-  | "user_status_at";
+  | "notified_at";
 
 export interface PostingsPage {
   items: Posting[];
@@ -228,7 +223,6 @@ export const api = {
       sort?: PostingSort;
       order?: "asc" | "desc";
       status?: FilterStatus | "";
-      userStatus?: UserStatus | "";
     } = {},
   ) => {
     const params = new URLSearchParams({
@@ -238,7 +232,6 @@ export const api = {
       order: opts.order ?? "desc",
     });
     if (opts.status) params.set("status", opts.status);
-    if (opts.userStatus) params.set("user_status", opts.userStatus);
     return request<PostingsPage>(`/postings?${params}`);
   },
   updatePostingStatus: (id: string, userStatus: UserStatus) =>

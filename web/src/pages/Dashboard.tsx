@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { PostingStatusPill } from "../components/PostingStatus";
 import { useToast } from "../components/Toast";
-import { timeAgo, timeUntil } from "../lib/format";
+import { timeAgo } from "../lib/format";
 
 export default function Dashboard() {
   const queryClient = useQueryClient();
@@ -74,18 +74,11 @@ export default function Dashboard() {
     return !latest || p.last_checked_at > latest ? p.last_checked_at : latest;
   }, null);
 
-  const now = Date.now();
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
   const matchesToday = (matchedRecent?.items ?? []).filter((p) => new Date(p.first_seen_at) >= startOfToday).length;
   const pendingTotal = pendingQueue?.total ?? 0;
-  const dueCount = pages.filter((p) => p.active && (!p.next_check_at || new Date(p.next_check_at).getTime() <= now)).length;
-  const backingOffCount = pages.filter((p) => p.active && p.failure_count > 0).length;
   const lastNotifiedAt = lastNotified?.items?.[0]?.notified_at ?? null;
-  const nextCheckAt = pages
-    .filter((p) => p.active && p.next_check_at)
-    .map((p) => p.next_check_at as string)
-    .sort()[0] ?? null;
 
   const llmConfigured = Boolean(settings?.llm_provider && settings?.llm_model && settings?.has_llm_api_key);
   const telegramConfigured = Boolean(settings?.has_telegram_bot_token && settings?.telegram_chat_id);
@@ -97,7 +90,7 @@ export default function Dashboard() {
         <div>
           <h1>Dashboard</h1>
           <p className="page-subtitle">
-            Last checked {timeAgo(lastChecked)} · next scheduled check {nextCheckAt ? timeUntil(nextCheckAt) : "due now"}
+            Last checked {timeAgo(lastChecked)}
           </p>
         </div>
         <button disabled={polling} onClick={checkNow}>
@@ -131,15 +124,6 @@ export default function Dashboard() {
           </span>
           <span className="stat-label">Active sources</span>
           {errorCount > 0 && <span className="stat-flag error">{errorCount} with errors</span>}
-        </Link>
-        <Link to="/sources" className="stat-card">
-          <span className="stat-value">{dueCount}</span>
-          <span className="stat-label">Sources due now</span>
-        </Link>
-        <Link to="/sources" className="stat-card">
-          <span className="stat-value">{backingOffCount === 0 ? "✓" : backingOffCount}</span>
-          <span className="stat-label">{backingOffCount === 0 ? "No sources backing off" : "Sources backing off"}</span>
-          {backingOffCount > 0 && <span className="stat-flag error">repeated failures — checked less often</span>}
         </Link>
         <span className="stat-card">
           <span className="stat-value">{timeAgo(lastNotifiedAt)}</span>

@@ -1,6 +1,6 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
-import { api, FilterStatus, Posting, PostingSort, UserStatus } from "../api";
+import { api, FilterStatus, Posting, PostingSort } from "../api";
 import { CompanyBadge, CompanyPanel } from "../components/CompanyPanel";
 import { PostingActions } from "../components/PostingActions";
 import { PostingStatusPill, VerdictPill } from "../components/PostingStatus";
@@ -15,17 +15,6 @@ const STATUS_OPTIONS: Array<{ value: FilterStatus | ""; label: string }> = [
   { value: "filtered", label: "Filtered out" },
   { value: "pending", label: "Awaiting screening" },
   { value: "skipped", label: "Not screened" },
-];
-
-const USER_STATUS_OPTIONS: Array<{ value: UserStatus | ""; label: string }> = [
-  { value: "", label: "Any status" },
-  { value: "interested", label: "Interested" },
-  { value: "applied", label: "Applied" },
-  { value: "interviewing", label: "Interviewing" },
-  { value: "offer", label: "Offer" },
-  { value: "rejected", label: "Rejected" },
-  { value: "not_interested", label: "Not interested" },
-  { value: "none", label: "No status yet" },
 ];
 
 /** The judge's full reasoning for one posting, shown when its row is expanded. */
@@ -64,12 +53,11 @@ export default function Postings() {
   const [sort, setSort] = useState<PostingSort>("first_seen_at");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
   const [status, setStatus] = useState<FilterStatus | "">("");
-  const [userStatus, setUserStatus] = useState<UserStatus | "">("");
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage, error } = useInfiniteQuery({
-    queryKey: ["postings", sort, order, status, userStatus],
-    queryFn: ({ pageParam }) => api.listPostings({ limit: PAGE_SIZE, offset: pageParam, sort, order, status, userStatus }),
+    queryKey: ["postings", sort, order, status],
+    queryFn: ({ pageParam }) => api.listPostings({ limit: PAGE_SIZE, offset: pageParam, sort, order, status }),
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => {
       const loaded = allPages.reduce((n, p) => n + p.items.length, 0);
@@ -104,13 +92,6 @@ export default function Postings() {
         <div className="postings-filters">
           <select value={status} onChange={(e) => setStatus(e.target.value as FilterStatus | "")}>
             {STATUS_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <select value={userStatus} onChange={(e) => setUserStatus(e.target.value as UserStatus | "")}>
-            {USER_STATUS_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>
@@ -174,9 +155,6 @@ export default function Postings() {
                   </td>
                   <td>
                     <PostingStatusPill posting={p} />
-                    {p.user_status !== "none" && (
-                      <StatusPill tone="pending">{p.user_status.replace("_", " ")}</StatusPill>
-                    )}
                   </td>
                 </tr>
                 {expanded === p.id && (
@@ -191,7 +169,7 @@ export default function Postings() {
             {items.length === 0 && !isLoading && (
               <tr>
                 <td colSpan={8} className="empty">
-                  {status === "" && userStatus === "" ? "Nothing extracted yet." : "No postings match these filters."}
+                  {status === "" ? "Nothing extracted yet." : "No postings match these filters."}
                 </td>
               </tr>
             )}

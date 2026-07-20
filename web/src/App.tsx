@@ -6,7 +6,6 @@ import TokenGate from "./components/TokenGate";
 import { ToastProvider } from "./components/Toast";
 import Dashboard from "./pages/Dashboard";
 import InboxPage from "./pages/InboxPage";
-import PipelinePage from "./pages/PipelinePage";
 import Postings from "./pages/Postings";
 import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/SettingsPage";
@@ -34,7 +33,6 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="inbox" element={<InboxPage />} />
             <Route path="matches" element={<Navigate to="/inbox" replace />} />
-            <Route path="pipeline" element={<PipelinePage />} />
             <Route path="sources" element={<Sources />} />
             <Route path="postings" element={<Postings />} />
             <Route path="profile" element={<ProfilePage />} />

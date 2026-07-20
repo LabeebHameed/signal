@@ -860,64 +860,6 @@ tr.verdict-row td {
   display: flex;
   gap: 0.5rem;
 }
-
-/* ---------- Pipeline page ---------- */
-
-.pipeline-board {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 1rem;
-  align-items: start;
-}
-.pipeline-column h2 {
-  font-size: 0.85rem;
-  color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  margin: 0 0 0.75rem;
-}
-.pipeline-count {
-  background: rgba(139, 147, 167, 0.14);
-  color: var(--fg-muted);
-  border-radius: 999px;
-  padding: 0.05rem 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-.pipeline-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-.pipeline-card {
-  padding: 0.85rem 1rem;
-  margin: 0;
-}
-.pipeline-card h3 {
-  margin: 0 0 0.3rem;
-  font-size: 0.88rem;
-  line-height: 1.35;
-}
-.pipeline-meta {
-  margin: 0 0 0.6rem;
-  font-size: 0.8rem;
-}
-.pipeline-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  font-size: 0.78rem;
-}
-.pipeline-foot select {
-  font-size: 0.78rem;
-  padding: 0.25rem 0.4rem;
-}
-.empty.small {
-  padding: 0.75rem 0;
-  font-size: 0.85rem;
-}
-
 /* ---------- Error boundary ---------- */
 
 .error-screen {

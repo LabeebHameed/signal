@@ -32,31 +32,26 @@ full company background and caution when there is one (the Telegram message
 itself stays short — see below).
 
 **Feedback loop:** mark a posting Interested / Not interested / Applied
-(Inbox or Pipeline) and future screening calls see your recent decisions as
+(Inbox or Postings) and future screening calls see your recent decisions as
 calibration examples — the judge leans on stated profile first, feedback only
 sharpens genuinely borderline calls. Block a company outright (Profile page,
 or the "Block company" action) and its postings are filtered before they ever
 reach the LLM.
 
-**Adaptive polling:** each page starts on a 15-minute check interval. It
-doubles on every consecutive unchanged poll up to a 6-hour cap, and resets to
-15 minutes the moment content actually changes — a settled page stops being
-hammered. A page that fails to fetch backs off exponentially instead (cap
-24 hours), and its honest error is shown in the Sources page rather than
-retried silently forever.
+**Fixed polling:** every active page is checked on a fixed 15-minute interval (on every cron tick). There is no adaptive backoff or decay — this ensures that new postings are discovered as quickly as possible.
 
 ## How it works
 
 ```
 pg_cron (every 15 min)
   └─> Edge Function: poll-pages
-        for each active page that is due (adaptive next_check_at, or all of them on "Check now"):
+        for each active page:
           0. claim the page (atomic lock) so an overlapping run can't double-process it
           1. known ATS host (Greenhouse/Lever/Ashby) or RSS/Atom feed → structured fetch,
              no LLM; otherwise generic fetch chain (browser headers → crawler UA →
              free keyless reader proxy), each attempt screened for block/challenge pages
           2. hash content → skip extraction if unchanged; still flushes any backlog left
-             by earlier judge/company/Telegram failures, then adjusts cadence
+             by earlier judge/company/Telegram failures
           3. LLM extracts postings as JSON (structured-source path skips this)
           4. diff by normalized dedupe key (tracking params stripped, so a rotating
              click-token doesn't look like a new posting every poll) against `postings`
@@ -75,8 +70,7 @@ pg_cron (every 15 min)
              the full judge reasoning and company dossier live on the Inbox page, not in
              the message itself
              (the first-ever crawl of a page is a silent baseline — no notification flood)
-          9. persist cadence: interval doubles on unchanged (cap 6h), resets to 15m on
-             change, failures back off exponentially (cap 24h)
+          9. persist state: update last content hash, check error, and failure count
 
 web UI (Vite + React, static)
   └─> Edge Function: api   (all requests carry the x-admin-token header)
@@ -246,9 +240,7 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   judge score and summary, company badge (✓ verified / ? unverified /
   ⚠ suspicious), the dossier, source links, and action buttons (Interested /
   Not interested / Applied). This is where the full reasoning lives —
-  Telegram is just the ping to go look. Move a posting through your pipeline
-  (Interested → Applied → Interviewing → Offer/Rejected) on the **Pipeline**
-  page.
+  Telegram is just the ping to go look.
 
 ## Behavior notes
 
@@ -269,28 +261,24 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   postings, or sits behind a real anti-bot challenge, fails honestly with the
   block signature named rather than being silently treated as empty.
 - **Failures don't stop the run**: a broken page records `last_error` and
-  `failure_count` (visible in the Sources page) and backs off exponentially
-  (cap 24h) instead of being retried every cron tick.
+  `failure_count` (visible in the Sources page) and retries on the next cron tick.
 - Poll manually any time:
-  `curl -X POST -H "x-admin-token: $ADMIN_TOKEN" https://<ref>.supabase.co/functions/v1/poll-pages -d '{"force": true}'`
-  (`force: true` ignores each page's adaptive due-time and checks all of them,
-  same as the UI's "Check now").
+  `curl -X POST -H "x-admin-token: $ADMIN_TOKEN" https://<ref>.supabase.co/functions/v1/poll-pages`
 
 ## Repo layout
 
 ```
 supabase/
   migrations/                       # schema: tables + RLS, pg_cron job, notify queue,
-                                    # filter layer, dedup, fetch strategy, feedback,
-                                    # cadence
+                                    # filter layer, dedup, fetch strategy, feedback
   functions/
     poll-pages/index.ts             # the poller (fetch → extract → dedupe → screen →
-                                    # company → notify → cadence)
+                                    # company → notify)
     api/index.ts                    # CRUD for the UI
     _shared/                        # fetcher (+ proxy fallback), ats (Greenhouse/Lever/
                                     # Ashby/RSS), dedupe, LLM adapters, judge, profile
                                     # expansion, company research, telegram, types
-web/                                # React UI: Dashboard, Inbox, Pipeline, Sources,
+web/                                # React UI: Dashboard, Inbox, Sources,
                                     # Postings, Profile, Settings (vercel.json included)
 ```
 

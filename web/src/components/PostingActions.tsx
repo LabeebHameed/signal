@@ -22,7 +22,7 @@ function patchCachedPostings(data: PostingsListData | PostingsInfiniteData | und
  * Records what the seeker did with a posting — feeds straight back into the
  * judge's calibration context on every future screening call (see judge.ts /
  * loadCalibration in poll-pages). Optimistic across every cached postings
- * query (Inbox, Postings, Pipeline, Dashboard's recent list all key off
+ * query (Inbox, Postings, Dashboard's recent list all key off
  * "postings"), reverted with a toast if the write actually fails.
  */
 function useSetPostingStatus() {
@@ -38,9 +38,7 @@ function useSetPostingStatus() {
     );
     api.updatePostingStatus(posting.id, next)
       .then(() => {
-        // Which column a posting belongs in (Pipeline) depends on
-        // user_status server-side — refetch so a moved posting lands in its
-        // new column instead of lingering, relabeled, in its old one.
+        // Refetch so changes are immediately visible across pages.
         queryClient.invalidateQueries({ queryKey: ["postings"] });
       })
       .catch((e) => {
@@ -51,8 +49,7 @@ function useSetPostingStatus() {
 }
 
 /** Interested / Not interested / Applied — the three calls that matter for
- * calibrating the judge; anything further along (interviewing, offer,
- * rejected) is moved from the Pipeline page instead. */
+ * calibrating the judge. */
 export function PostingActions({ posting }: { posting: Posting }) {
   const setStatus = useSetPostingStatus();
   return (
@@ -68,27 +65,6 @@ export function PostingActions({ posting }: { posting: Posting }) {
         </button>
       ))}
     </div>
-  );
-}
-
-/** Move a posting further along the pipeline (or back) via a plain select —
- * used on the Pipeline page where every status is a valid destination. */
-export function StatusSelect({ posting }: { posting: Posting }) {
-  const setStatus = useSetPostingStatus();
-  return (
-    <select
-      value={posting.user_status}
-      onChange={(e) => setStatus(posting, e.target.value as UserStatus)}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <option value="none">No status</option>
-      <option value="interested">Interested</option>
-      <option value="applied">Applied</option>
-      <option value="interviewing">Interviewing</option>
-      <option value="offer">Offer</option>
-      <option value="rejected">Rejected</option>
-      <option value="not_interested">Not interested</option>
-    </select>
   );
 }
 

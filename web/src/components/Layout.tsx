@@ -2,7 +2,6 @@ import { NavLink, Outlet } from "react-router-dom";
 import {
   DashboardIcon,
   MatchesIcon,
-  PipelineIcon,
   PostingsIcon,
   ProfileIcon,
   SettingsIcon,
@@ -12,7 +11,6 @@ import {
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: DashboardIcon, end: true },
   { to: "/inbox", label: "Inbox", icon: MatchesIcon, end: false },
-  { to: "/pipeline", label: "Pipeline", icon: PipelineIcon, end: false },
   { to: "/sources", label: "Sources", icon: SourcesIcon, end: false },
   { to: "/postings", label: "Postings", icon: PostingsIcon, end: false },
   { to: "/profile", label: "Profile", icon: ProfileIcon, end: false },

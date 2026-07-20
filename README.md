@@ -1,9 +1,11 @@
-# Signal — Job Posting Notifier (MVP)
+# Signal — Job Posting Notifier
 
 Watches job-listing pages you choose and sends you a Telegram message whenever a
-new posting appears. Pages can have any structure (Greenhouse, Lever, custom
-career sites, JS-rendered SPAs) — an LLM extracts the postings, so there are no
-per-site parsers.
+new posting appears. Known ATS platforms (Greenhouse, Lever, Ashby) and RSS/Atom
+feeds are read straight from their public APIs — no LLM involved and immune to
+anti-bot walls. Everything else goes through a generic fetch chain (real
+browser headers, then a crawler UA, then a free keyless reader proxy) followed
+by LLM extraction, so there are no per-site parsers to maintain.
 
 **Qualification layer:** between extraction and notification sits an LLM
 judge. On the **Profile** page you describe what you're looking for in one
@@ -25,31 +27,56 @@ by the LLM into a cached dossier: what the company does, size, stage, recent
 funding, and a legitimacy assessment with concrete flags (fake-looking
 companies on job boards are a real thing). This layer **never blocks a
 posting** — an unverifiable or preference-clashing company still notifies,
-and the **Matches** page shows every qualifying posting as a card with the
+and the **Inbox** page shows every qualifying posting as a card with the
 full company background and caution when there is one (the Telegram message
 itself stays short — see below).
+
+**Feedback loop:** mark a posting Interested / Not interested / Applied
+(Inbox or Pipeline) and future screening calls see your recent decisions as
+calibration examples — the judge leans on stated profile first, feedback only
+sharpens genuinely borderline calls. Block a company outright (Profile page,
+or the "Block company" action) and its postings are filtered before they ever
+reach the LLM.
+
+**Adaptive polling:** each page starts on a 15-minute check interval. It
+doubles on every consecutive unchanged poll up to a 6-hour cap, and resets to
+15 minutes the moment content actually changes — a settled page stops being
+hammered. A page that fails to fetch backs off exponentially instead (cap
+24 hours), and its honest error is shown in the Sources page rather than
+retried silently forever.
 
 ## How it works
 
 ```
 pg_cron (every 15 min)
   └─> Edge Function: poll-pages
-        for each active watched page:
-          1. fetch page content (plain HTTP fetch — JS-rendered SPA pages aren't supported)
-          2. hash content → skip if unchanged since last check (no LLM cost)
-          3. LLM extracts postings as JSON  [{title, url, company, location}]
-          4. diff against `postings` table (dedupe key = posting URL, or title+company hash)
-          5. LLM judge screens new rows against your job profile (one batched call
-             per page) → verdict + 0-100 score + per-dimension reasoning per posting
+        for each active page that is due (adaptive next_check_at, or all of them on "Check now"):
+          0. claim the page (atomic lock) so an overlapping run can't double-process it
+          1. known ATS host (Greenhouse/Lever/Ashby) or RSS/Atom feed → structured fetch,
+             no LLM; otherwise generic fetch chain (browser headers → crawler UA →
+             free keyless reader proxy), each attempt screened for block/challenge pages
+          2. hash content → skip extraction if unchanged; still flushes any backlog left
+             by earlier judge/company/Telegram failures, then adjusts cadence
+          3. LLM extracts postings as JSON (structured-source path skips this)
+          4. diff by normalized dedupe key (tracking params stripped, so a rotating
+             click-token doesn't look like a new posting every poll) against `postings`
+          5. blocked companies are filtered deterministically, no LLM call; otherwise the
+             LLM judge screens new rows against your job profile (one batched call per
+             page, with your recent feedback as calibration) → verdict + 0-100 score +
+             per-dimension reasoning per posting
                matched  → company layer (if enabled), then queued for Telegram
                filtered → kept in the UI with its verdict, never notified
           6. company layer (optional): research each match's company (Tavily search
              + LLM dossier, cached 30 days) → ok, or warn with a caution — never blocked
-          7. matched rows → one short Telegram message each: title, company
-             (+ type when researched), location, link — the full judge
-             reasoning and company dossier live on the Matches page, not in
+          7. cross-source dedup: a job already notified recently under a different watched
+             page (same normalized title+company) is linked as a duplicate, not re-sent
+          8. matched rows → one short Telegram message each: title, judge score +
+             one-line reason, company (+ type when researched), location, pay, link —
+             the full judge reasoning and company dossier live on the Inbox page, not in
              the message itself
              (the first-ever crawl of a page is a silent baseline — no notification flood)
+          9. persist cadence: interval doubles on unchanged (cap 6h), resets to 15m on
+             change, failures back off exponentially (cap 24h)
 
 web UI (Vite + React, static)
   └─> Edge Function: api   (all requests carry the x-admin-token header)
@@ -141,11 +168,14 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   do). Use **Send test message** in Settings to verify instantly. Failed
   notifications aren't lost — they queue (`pending` in the postings list) and
   retry on the next poll once Telegram works.
-- **"fetch failed: HTTP 403" / connection errors**: the site blocks datacenter
-  traffic (anti-bot) or requires JavaScript to render its content. Signal only
-  does plain HTTP fetches — there's no rendering fallback — so these pages
-  stay unfetchable; swap in a URL that serves the listing as static HTML
-  (many boards have one, e.g. a Greenhouse/Lever-hosted mirror) if available.
+- **"fetch failed: HTTP 403" / connection errors**: Signal already retries with
+  a second header profile and a free keyless reader proxy before giving up —
+  the Sources page shows which strategy last worked (`direct` / `direct-alt` /
+  `proxy:pure`) and, on failure, the honest per-strategy errors plus the
+  page's current backoff. A page that needs JavaScript to render its listing,
+  or sits behind a genuine Cloudflare/DataDome challenge, will still fail
+  honestly — nothing keyless beats that. Swap in a URL that serves the
+  listing as static HTML or a known ATS/RSS source if one exists.
 
 ## How filtering works
 
@@ -171,6 +201,16 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 - **Three modes** (Profile page): *Off* forwards everything, *Balanced*
   notifies for `match` and `borderline` verdicts, *Strict* for `match` only.
   An empty profile behaves like Off.
+- **Min score threshold** (Profile page): layered on top of the mode — a
+  posting must also score at or above this to notify, even if the verdict
+  qualifies.
+- **Blocked companies** (Profile page, or "Block company" in the Inbox):
+  postings from a blocked company are filtered deterministically before ever
+  reaching the LLM judge — an absolute, cost-free override.
+- **Feedback loop.** Marking a posting Interested / Not interested / Applied
+  feeds your most recent decisions back into the judge prompt as calibration
+  examples on future screening calls. It only nudges genuinely borderline
+  calls — a single data point never overrides a clear read of the profile.
 - **Nothing is dropped.** Filtered postings stay in the Postings page with
   their verdict, 0-100 score, per-dimension breakdown, and a plain-English
   summary — click any screened row to see why it was (or wasn't) sent. The
@@ -196,43 +236,62 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   that only exists on job boards comes out `uncertain` — caution, not
   accusation.
 - **Annotate, never block.** Every matched posting is still delivered — the
-  Telegram message stays short (title, company + type, location, link);
-  a company that can't be verified or clashes with your stated preferences
-  (e.g. "no tiny 2–3 person firms") gets its caution on the **Matches** page
-  instead, with a badge and the full dossier. Research failures retry on
-  later runs (up to 3 attempts), then the posting is delivered with a
-  "couldn't verify" caution rather than being stuck.
-- **Matches page** — every posting that came out of the filter, as cards:
+  Telegram message stays short (title, score + reason, company + type,
+  location, pay, link); a company that can't be verified or clashes with
+  your stated preferences (e.g. "no tiny 2–3 person firms") gets its caution
+  on the **Inbox** page instead, with a badge and the full dossier. Research
+  failures retry on later runs (up to 3 attempts), then the posting is
+  delivered with a "couldn't verify" caution rather than being stuck.
+- **Inbox page** — every posting that came out of the filter, as cards:
   judge score and summary, company badge (✓ verified / ? unverified /
-  ⚠ suspicious), the dossier, and source links. This is where the full
-  reasoning lives — Telegram is just the ping to go look.
+  ⚠ suspicious), the dossier, source links, and action buttons (Interested /
+  Not interested / Applied). This is where the full reasoning lives —
+  Telegram is just the ping to go look. Move a posting through your pipeline
+  (Interested → Applied → Interviewing → Offer/Rejected) on the **Pipeline**
+  page.
 
 ## Behavior notes
 
 - **First crawl of a page is a baseline**: postings are recorded but not
   notified (otherwise adding a page would flood you with every existing job).
   Postings that appear after that are screened and, if they qualify, notified.
-- **Max 20 notifications per page per run**, then a single "…and N more" message.
-- **JS-rendered pages aren't supported**: Signal only does a plain HTTP fetch,
-  no rendering fallback — a page that needs JavaScript to show its postings
-  will fetch as an empty shell and simply show no new postings.
+- **No duplicate notifications**: per-source dedupe uses a normalized URL (or
+  title+company+location when a posting has no link), immune to rotating
+  tracking tokens; cross-source dedupe links the same job posted to a
+  different watched page to whichever copy notified first. Notification
+  sending is claimed atomically so an overlapping cron run, chained batch, or
+  manual "Check now" can never send the same posting twice.
+- **Max 20 notifications per page per run**; the rest stay queued and go out
+  on the next run.
+- **Most sites without JavaScript rendering are supported** via the fetch
+  chain (browser headers → crawler UA → keyless reader proxy) or a structured
+  ATS/RSS adapter. A page that truly requires JavaScript to render its
+  postings, or sits behind a real anti-bot challenge, fails honestly with the
+  block signature named rather than being silently treated as empty.
 - **Failures don't stop the run**: a broken page records `last_error` and
-  `failure_count` (visible in the UI) and the poller moves on.
+  `failure_count` (visible in the Sources page) and backs off exponentially
+  (cap 24h) instead of being retried every cron tick.
 - Poll manually any time:
-  `curl -X POST -H "x-admin-token: $ADMIN_TOKEN" https://<ref>.supabase.co/functions/v1/poll-pages`
+  `curl -X POST -H "x-admin-token: $ADMIN_TOKEN" https://<ref>.supabase.co/functions/v1/poll-pages -d '{"force": true}'`
+  (`force: true` ignores each page's adaptive due-time and checks all of them,
+  same as the UI's "Check now").
 
 ## Repo layout
 
 ```
 supabase/
-  migrations/                       # schema: tables + RLS, pg_cron job, notify
-                                    # queue, filter layer
+  migrations/                       # schema: tables + RLS, pg_cron job, notify queue,
+                                    # filter layer, dedup, fetch strategy, feedback,
+                                    # cadence
   functions/
-    poll-pages/index.ts             # the poller (fetch → extract → screen → company → notify)
+    poll-pages/index.ts             # the poller (fetch → extract → dedupe → screen →
+                                    # company → notify → cadence)
     api/index.ts                    # CRUD for the UI
-    _shared/                        # fetcher, LLM adapters, judge, profile expansion,
-                                    # company research, telegram, types
-web/                                # minimal React UI (vercel.json included)
+    _shared/                        # fetcher (+ proxy fallback), ats (Greenhouse/Lever/
+                                    # Ashby/RSS), dedupe, LLM adapters, judge, profile
+                                    # expansion, company research, telegram, types
+web/                                # React UI: Dashboard, Inbox, Pipeline, Sources,
+                                    # Postings, Profile, Settings (vercel.json included)
 ```
 
 ## Out of scope (future phases)
@@ -241,3 +300,6 @@ web/                                # minimal React UI (vercel.json included)
 - Multi-user accounts and auth
 - Telegram `/start` webhook onboarding (auto-capture chat ID)
 - Notification digests, per-site tuning
+- Email/SMS/Slack/push notification channels (schema keeps channels
+  pluggable; Telegram is the only one wired up)
+- Native mobile apps, resume/LinkedIn import

@@ -80,22 +80,19 @@ export function formatPostingMessage(posting: {
   filter_verdict?: Pick<PostingVerdict, "summary"> | null;
 }, pageLabel: string, companyInfo?: CompanyInfo | null): string {
   const lines: string[] = [];
-  lines.push(`\u{1F514} ${escapeHtml(posting.title)}`);
+  lines.push(`\u{1F514}  ${escapeHtml(posting.title)}`);
   lines.push("");
-
-  if (posting.filter_verdict?.summary) {
-    const score = posting.filter_score != null ? `${posting.filter_score}/100 — ` : "";
-    lines.push(`\u{1F3AF} ${score}${escapeHtml(posting.filter_verdict.summary)}`);
-    lines.push("");
-  }
 
   const companyName = companyInfo?.display_name || posting.company;
   if (companyName) {
-    const type = companyInfo?.dossier?.company_type;
-    lines.push(`\u{1F3E2} ${escapeHtml(companyName)}${type ? ` — ${escapeHtml(type)}` : ""}`);
+    lines.push(`\u{1F3E2}  ${escapeHtml(companyName)}`);
   }
-  if (posting.location) lines.push(`\u{1F4CD} ${escapeHtml(posting.location)}`);
-  if (posting.compensation) lines.push(`\u{1F4B0} ${escapeHtml(posting.compensation)}`);
+  if (posting.compensation) {
+    lines.push(`\u{1F4B0}  ${escapeHtml(posting.compensation)}`);
+  }
+  if (posting.location) {
+    lines.push(`\u{1F4CD}  ${escapeHtml(posting.location)}`);
+  }
 
   lines.push("");
   if (posting.url) {

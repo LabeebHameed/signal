@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { getToken, setToken } from "./api";
 import Layout from "./components/Layout";
 import TokenGate from "./components/TokenGate";
 import { ToastProvider } from "./components/Toast";
 import Dashboard from "./pages/Dashboard";
-import MatchesPage from "./pages/MatchesPage";
+import InboxPage from "./pages/InboxPage";
+import PipelinePage from "./pages/PipelinePage";
 import Postings from "./pages/Postings";
 import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/SettingsPage";
@@ -31,7 +32,9 @@ export default function App() {
             }
           >
             <Route index element={<Dashboard />} />
-            <Route path="matches" element={<MatchesPage />} />
+            <Route path="inbox" element={<InboxPage />} />
+            <Route path="matches" element={<Navigate to="/inbox" replace />} />
+            <Route path="pipeline" element={<PipelinePage />} />
             <Route path="sources" element={<Sources />} />
             <Route path="postings" element={<Postings />} />
             <Route path="profile" element={<ProfilePage />} />

@@ -9,6 +9,12 @@ export interface WatchedPage {
   last_error: string | null;
   failure_count: number;
   first_crawl_done: boolean;
+  /** What last produced usable content: direct / direct-alt / proxy:pure / greenhouse / lever / ashby / rss. */
+  fetch_strategy: string | null;
+  /** Current steady-state check interval in minutes — doubles when unchanged (cap 6h), resets to 15 on a real change. */
+  check_interval_minutes: number;
+  /** When this page is next due for a scheduled check; null means due now. */
+  next_check_at: string | null;
 }
 
 /** The job profile the filter judges postings against — all optional free text. */
@@ -83,12 +89,17 @@ export interface PostingCompany {
   researched_at: string | null;
 }
 
+/** What the seeker did with a posting after seeing it — feeds back into the
+ * judge's calibration context on every future screening call. */
+export type UserStatus = "none" | "interested" | "not_interested" | "applied" | "interviewing" | "offer" | "rejected";
+
 export interface Posting {
   id: string;
   title: string;
   url: string | null;
   company: string | null;
   location: string | null;
+  compensation: string | null;
   posted_at: string | null;
   posted_text: string | null;
   first_seen_at: string;
@@ -99,11 +110,23 @@ export interface Posting {
   filter_verdict: PostingVerdict | null;
   company_status: CompanyStatus;
   company_verdict: CompanyVerdict | null;
+  user_status: UserStatus;
+  user_status_at: string | null;
+  /** Set when this posting was recognized as a repost of one already notified
+   * from another source — the id of that earlier posting. */
+  duplicate_of: string | null;
   companies: PostingCompany | null;
   watched_pages: { label: string; url: string } | null;
 }
 
-export type PostingSort = "first_seen_at" | "posted_at" | "title" | "company" | "filter_score";
+export type PostingSort =
+  | "first_seen_at"
+  | "posted_at"
+  | "title"
+  | "company"
+  | "filter_score"
+  | "notified_at"
+  | "user_status_at";
 
 export interface PostingsPage {
   items: Posting[];
@@ -116,6 +139,10 @@ export interface Settings {
   filter_profile: FilterProfile;
   filter_mode: FilterMode;
   company_filter_enabled: boolean;
+  /** Newline/comma-separated company names filtered out before the LLM judge ever sees them. */
+  blocked_companies: string;
+  /** Minimum judge score (0-100) required to notify. */
+  min_score: number;
   telegram_chat_id: string;
   llm_provider: string;
   llm_model: string;
@@ -138,6 +165,8 @@ export interface SettingsUpdate {
   filter_profile?: FilterProfile;
   filter_mode?: FilterMode;
   company_filter_enabled?: boolean;
+  blocked_companies?: string;
+  min_score?: number;
   telegram_chat_id?: string;
   llm_provider?: string;
   llm_model?: string;
@@ -193,7 +222,14 @@ export const api = {
   saveSettings: (update: SettingsUpdate) =>
     request<Settings>("/settings", { method: "PUT", body: JSON.stringify(update) }),
   listPostings: (
-    opts: { limit?: number; offset?: number; sort?: PostingSort; order?: "asc" | "desc"; status?: FilterStatus | "" } = {},
+    opts: {
+      limit?: number;
+      offset?: number;
+      sort?: PostingSort;
+      order?: "asc" | "desc";
+      status?: FilterStatus | "";
+      userStatus?: UserStatus | "";
+    } = {},
   ) => {
     const params = new URLSearchParams({
       limit: String(opts.limit ?? 50),
@@ -202,8 +238,11 @@ export const api = {
       order: opts.order ?? "desc",
     });
     if (opts.status) params.set("status", opts.status);
+    if (opts.userStatus) params.set("user_status", opts.userStatus);
     return request<PostingsPage>(`/postings?${params}`);
   },
+  updatePostingStatus: (id: string, userStatus: UserStatus) =>
+    request<Posting>(`/postings/${id}`, { method: "PATCH", body: JSON.stringify({ user_status: userStatus }) }),
   poll: () => request<{ pages: number; results: unknown[] }>("/poll", { method: "POST" }),
   testTelegram: () => request<{ ok: boolean }>("/telegram-test", { method: "POST" }),
   expandProfile: (statement: string) =>

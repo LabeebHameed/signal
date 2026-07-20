@@ -107,6 +107,8 @@ export default function ProfilePage() {
         filter_profile: settings.filter_profile,
         filter_mode: settings.filter_mode,
         company_filter_enabled: settings.company_filter_enabled,
+        blocked_companies: settings.blocked_companies,
+        min_score: settings.min_score,
       });
       setSettings(updated);
       queryClient.setQueryData(["settings"], updated);
@@ -188,7 +190,20 @@ export default function ProfilePage() {
                 <option value="strict">Strict — clear matches only</option>
               </select>
             </label>
+            <label className="inline-label">
+              Minimum score
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={5}
+                value={settings.min_score}
+                onChange={(e) => setSettings({ ...settings, min_score: Number(e.target.value) })}
+                className="score-input"
+              />
+            </label>
           </div>
+          <p className="hint">Only notify when the judge's fit score is at or above this — 0 means no threshold.</p>
         </section>
 
         <section className="card">
@@ -234,7 +249,7 @@ export default function ProfilePage() {
             When on, Signal researches the company behind every matched posting before notifying you — is it a real
             operating company, what does it do, its size, stage, and recent funding. Nothing gets hidden: a company
             that can't be verified or clashes with your preferences is delivered with a clear caution and the full
-            background on the Matches page. Uses your Tavily API key for web search (spends Tavily quota).
+            background on the Inbox page. Uses your Tavily API key for web search (spends Tavily quota).
           </p>
           <label className="toggle-row">
             <input
@@ -249,6 +264,21 @@ export default function ProfilePage() {
               Company checks stay inactive until a Tavily API key is set in Settings (free at tavily.com).
             </p>
           )}
+        </section>
+
+        <section className="card">
+          <h2>Blocked companies</h2>
+          <p className="hint filter-intro">
+            Postings from these companies are filtered out automatically, before they ever reach the judge — no LLM
+            call, no exceptions. One company per line. You can also block a company directly from a posting in the
+            Inbox.
+          </p>
+          <textarea
+            value={settings.blocked_companies}
+            onChange={(e) => setSettings({ ...settings, blocked_companies: e.target.value })}
+            rows={3}
+            placeholder={"e.g.\nAcme Staffing\nShadyCorp"}
+          />
         </section>
 
         <button type="submit" disabled={saving}>

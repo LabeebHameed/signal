@@ -1,9 +1,18 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { DashboardIcon, MatchesIcon, PostingsIcon, ProfileIcon, SettingsIcon, SourcesIcon } from "../lib/icons";
+import {
+  DashboardIcon,
+  MatchesIcon,
+  PipelineIcon,
+  PostingsIcon,
+  ProfileIcon,
+  SettingsIcon,
+  SourcesIcon,
+} from "../lib/icons";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: DashboardIcon, end: true },
-  { to: "/matches", label: "Matches", icon: MatchesIcon, end: false },
+  { to: "/inbox", label: "Inbox", icon: MatchesIcon, end: false },
+  { to: "/pipeline", label: "Pipeline", icon: PipelineIcon, end: false },
   { to: "/sources", label: "Sources", icon: SourcesIcon, end: false },
   { to: "/postings", label: "Postings", icon: PostingsIcon, end: false },
   { to: "/profile", label: "Profile", icon: ProfileIcon, end: false },

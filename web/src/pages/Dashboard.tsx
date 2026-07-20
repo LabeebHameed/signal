@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { PostingStatusPill } from "../components/PostingStatus";
 import { useToast } from "../components/Toast";
-import { timeAgo } from "../lib/format";
+import { timeAgo, timeUntil } from "../lib/format";
 
 export default function Dashboard() {
   const queryClient = useQueryClient();
@@ -18,6 +18,21 @@ export default function Dashboard() {
   const { data: recentPage, isLoading: postingsLoading } = useQuery({
     queryKey: ["postings", "recent"],
     queryFn: () => api.listPostings({ limit: 8, sort: "first_seen_at", order: "desc" }),
+  });
+  // The most recent matches, used both for the "matches today" count and
+  // (via .total) how many have ever matched — one query covers both.
+  const { data: matchedRecent } = useQuery({
+    queryKey: ["postings", "first_seen_at", "desc", "matched", "", "dashboard"],
+    queryFn: () => api.listPostings({ limit: 50, sort: "first_seen_at", order: "desc", status: "matched" }),
+  });
+  // limit: 1 — only the total count is needed, not the rows themselves.
+  const { data: pendingQueue } = useQuery({
+    queryKey: ["postings", "pending", "count"],
+    queryFn: () => api.listPostings({ limit: 1, status: "pending" }),
+  });
+  const { data: lastNotified } = useQuery({
+    queryKey: ["postings", "notified_at", "desc", "", "", "dashboard"],
+    queryFn: () => api.listPostings({ limit: 1, sort: "notified_at", order: "desc" }),
   });
   const { data: settings, isLoading: settingsLoading } = useQuery({
     queryKey: ["settings"],
@@ -59,6 +74,19 @@ export default function Dashboard() {
     return !latest || p.last_checked_at > latest ? p.last_checked_at : latest;
   }, null);
 
+  const now = Date.now();
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const matchesToday = (matchedRecent?.items ?? []).filter((p) => new Date(p.first_seen_at) >= startOfToday).length;
+  const pendingTotal = pendingQueue?.total ?? 0;
+  const dueCount = pages.filter((p) => p.active && (!p.next_check_at || new Date(p.next_check_at).getTime() <= now)).length;
+  const backingOffCount = pages.filter((p) => p.active && p.failure_count > 0).length;
+  const lastNotifiedAt = lastNotified?.items?.[0]?.notified_at ?? null;
+  const nextCheckAt = pages
+    .filter((p) => p.active && p.next_check_at)
+    .map((p) => p.next_check_at as string)
+    .sort()[0] ?? null;
+
   const llmConfigured = Boolean(settings?.llm_provider && settings?.llm_model && settings?.has_llm_api_key);
   const telegramConfigured = Boolean(settings?.has_telegram_bot_token && settings?.telegram_chat_id);
   const showSetupBanner = !loading && settings && (!llmConfigured || !telegramConfigured);
@@ -68,7 +96,9 @@ export default function Dashboard() {
       <header className="page-header">
         <div>
           <h1>Dashboard</h1>
-          <p className="page-subtitle">Last checked {timeAgo(lastChecked)}</p>
+          <p className="page-subtitle">
+            Last checked {timeAgo(lastChecked)} · next scheduled check {nextCheckAt ? timeUntil(nextCheckAt) : "due now"}
+          </p>
         </div>
         <button disabled={polling} onClick={checkNow}>
           {polling ? "Starting…" : "Check now"}
@@ -86,6 +116,14 @@ export default function Dashboard() {
       )}
 
       <section className="stat-grid">
+        <Link to="/inbox" className="stat-card">
+          <span className="stat-value">{matchesToday}</span>
+          <span className="stat-label">Matches today</span>
+        </Link>
+        <Link to="/postings" className="stat-card">
+          <span className="stat-value">{pendingTotal}</span>
+          <span className="stat-label">Awaiting screening</span>
+        </Link>
         <Link to="/sources" className="stat-card">
           <span className="stat-value">
             {activeCount}
@@ -94,13 +132,22 @@ export default function Dashboard() {
           <span className="stat-label">Active sources</span>
           {errorCount > 0 && <span className="stat-flag error">{errorCount} with errors</span>}
         </Link>
+        <Link to="/sources" className="stat-card">
+          <span className="stat-value">{dueCount}</span>
+          <span className="stat-label">Sources due now</span>
+        </Link>
+        <Link to="/sources" className="stat-card">
+          <span className="stat-value">{backingOffCount === 0 ? "✓" : backingOffCount}</span>
+          <span className="stat-label">{backingOffCount === 0 ? "No sources backing off" : "Sources backing off"}</span>
+          {backingOffCount > 0 && <span className="stat-flag error">repeated failures — checked less often</span>}
+        </Link>
+        <span className="stat-card">
+          <span className="stat-value">{timeAgo(lastNotifiedAt)}</span>
+          <span className="stat-label">Last Telegram send</span>
+        </span>
         <Link to="/postings" className="stat-card">
           <span className="stat-value">{totalPostings}</span>
           <span className="stat-label">Postings extracted</span>
-        </Link>
-        <Link to="/sources" className="stat-card">
-          <span className="stat-value">{errorCount === 0 ? "✓" : errorCount}</span>
-          <span className="stat-label">{errorCount === 0 ? "No source errors" : "Sources need attention"}</span>
         </Link>
       </section>
 

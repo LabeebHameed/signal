@@ -1,19 +1,49 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { CompanyPanel } from "../components/CompanyPanel";
+import { BlockCompanyButton, PostingActions } from "../components/PostingActions";
 import { StatusPill } from "../components/StatusPill";
 import { timeAgo } from "../lib/format";
 
 const PAGE_SIZE = 20;
 
+/** The judge's per-dimension breakdown, collapsed by default — the summary
+ * line above already gives the headline; this is for when you want to know
+ * exactly why. */
+function DimensionBreakdown({ dimensions }: { dimensions: Array<{ name: string; fit: string; note: string }> }) {
+  const [open, setOpen] = useState(false);
+  if (dimensions.length === 0) return null;
+  return (
+    <div className="dim-expander">
+      <button type="button" className="link-toggle" onClick={() => setOpen(!open)}>
+        <span className={`chevron${open ? " open" : ""}`}>▸</span> {open ? "Hide" : "Show"} reasoning
+      </button>
+      {open && (
+        <ul className="verdict-dims">
+          {dimensions.map((d, i) => (
+            <li key={`${d.name}-${i}`}>
+              <span className={`dim-fit dim-${d.fit}`}>
+                {d.name}: {d.fit}
+              </span>
+              {d.note && <span className="muted"> — {d.note}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /**
  * The payoff surface: only the postings that came out of the filter, as
  * cards, each carrying the judge's reasoning and the researched company
- * background. Nothing here is ever hidden by the company layer — a shady
- * company is simply shown as that.
+ * background, plus the feedback actions (Interested / Not interested /
+ * Applied / Block company) that calibrate future screening. Nothing here is
+ * ever hidden by the company layer — a shady company is simply shown as that.
  */
-export default function MatchesPage() {
+export default function InboxPage() {
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: api.getSettings });
   const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage, error } = useInfiniteQuery({
     queryKey: ["postings", "first_seen_at", "desc", "matched"],
@@ -35,7 +65,7 @@ export default function MatchesPage() {
     <div className="page">
       <header className="page-header">
         <div>
-          <h1>Matches</h1>
+          <h1>Inbox</h1>
           <p className="page-subtitle">
             {total} posting{total === 1 ? "" : "s"} that fit your profile, with the company behind each one.
           </p>
@@ -76,13 +106,22 @@ export default function MatchesPage() {
               {[
                 p.companies?.display_name || p.company,
                 p.location,
+                p.compensation,
                 p.posted_text || p.posted_at,
               ]
                 .filter(Boolean)
                 .join(" · ") || "—"}
             </p>
             {p.filter_verdict?.summary && <p className="match-summary">{p.filter_verdict.summary}</p>}
+            {p.filter_verdict && <DimensionBreakdown dimensions={p.filter_verdict.dimensions} />}
             <CompanyPanel posting={p} />
+            {p.duplicate_of && (
+              <p className="hint">Also seen on another source — already notified from there, so this one stayed quiet.</p>
+            )}
+            <div className="match-actions">
+              <PostingActions posting={p} />
+              <BlockCompanyButton posting={p} />
+            </div>
             <footer className="match-foot muted">
               from {p.watched_pages?.label || p.watched_pages?.url || "—"} · seen {timeAgo(p.first_seen_at)}
               {p.notified_at ? " · sent to Telegram" : ""}

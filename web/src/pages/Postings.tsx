@@ -1,8 +1,10 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
-import { api, FilterStatus, Posting, PostingSort } from "../api";
+import { api, FilterStatus, Posting, PostingSort, UserStatus } from "../api";
 import { CompanyBadge, CompanyPanel } from "../components/CompanyPanel";
+import { PostingActions } from "../components/PostingActions";
 import { PostingStatusPill, VerdictPill } from "../components/PostingStatus";
+import { StatusPill } from "../components/StatusPill";
 import { timeAgo } from "../lib/format";
 
 const PAGE_SIZE = 50;
@@ -15,27 +17,45 @@ const STATUS_OPTIONS: Array<{ value: FilterStatus | ""; label: string }> = [
   { value: "skipped", label: "Not screened" },
 ];
 
+const USER_STATUS_OPTIONS: Array<{ value: UserStatus | ""; label: string }> = [
+  { value: "", label: "Any status" },
+  { value: "interested", label: "Interested" },
+  { value: "applied", label: "Applied" },
+  { value: "interviewing", label: "Interviewing" },
+  { value: "offer", label: "Offer" },
+  { value: "rejected", label: "Rejected" },
+  { value: "not_interested", label: "Not interested" },
+  { value: "none", label: "No status yet" },
+];
+
 /** The judge's full reasoning for one posting, shown when its row is expanded. */
 function VerdictDetail({ posting }: { posting: Posting }) {
   const v = posting.filter_verdict;
-  if (!v) return null;
   return (
     <div className="verdict-detail">
-      {v.dealbreaker && <p className="verdict-dealbreaker">⛔ Dealbreaker: {v.dealbreaker}</p>}
-      {v.summary && <p>{v.summary}</p>}
-      {v.dimensions.length > 0 && (
-        <ul className="verdict-dims">
-          {v.dimensions.map((d, i) => (
-            <li key={`${d.name}-${i}`}>
-              <span className={`dim-fit dim-${d.fit}`}>
-                {d.name}: {d.fit}
-              </span>
-              {d.note && <span className="muted"> — {d.note}</span>}
-            </li>
-          ))}
-        </ul>
+      {posting.duplicate_of && (
+        <p className="hint">Duplicate — a matching posting from another source was already notified.</p>
       )}
-      <CompanyPanel posting={posting} />
+      {v && (
+        <>
+          {v.dealbreaker && <p className="verdict-dealbreaker">⛔ Dealbreaker: {v.dealbreaker}</p>}
+          {v.summary && <p>{v.summary}</p>}
+          {v.dimensions.length > 0 && (
+            <ul className="verdict-dims">
+              {v.dimensions.map((d, i) => (
+                <li key={`${d.name}-${i}`}>
+                  <span className={`dim-fit dim-${d.fit}`}>
+                    {d.name}: {d.fit}
+                  </span>
+                  {d.note && <span className="muted"> — {d.note}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+          <CompanyPanel posting={posting} />
+        </>
+      )}
+      <PostingActions posting={posting} />
     </div>
   );
 }
@@ -44,11 +64,12 @@ export default function Postings() {
   const [sort, setSort] = useState<PostingSort>("first_seen_at");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
   const [status, setStatus] = useState<FilterStatus | "">("");
+  const [userStatus, setUserStatus] = useState<UserStatus | "">("");
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage, error } = useInfiniteQuery({
-    queryKey: ["postings", sort, order, status],
-    queryFn: ({ pageParam }) => api.listPostings({ limit: PAGE_SIZE, offset: pageParam, sort, order, status }),
+    queryKey: ["postings", sort, order, status, userStatus],
+    queryFn: ({ pageParam }) => api.listPostings({ limit: PAGE_SIZE, offset: pageParam, sort, order, status, userStatus }),
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => {
       const loaded = allPages.reduce((n, p) => n + p.items.length, 0);
@@ -77,16 +98,25 @@ export default function Postings() {
           <h1>Postings</h1>
           <p className="page-subtitle">
             {total} {status === "" ? "extracted" : STATUS_OPTIONS.find((o) => o.value === status)?.label.toLowerCase()}
-            {items.length < total ? ` · showing ${items.length}` : ""} · click a screened row to see the reasoning
+            {items.length < total ? ` · showing ${items.length}` : ""} · click a row to see the reasoning and act on it
           </p>
         </div>
-        <select value={status} onChange={(e) => setStatus(e.target.value as FilterStatus | "")}>
-          {STATUS_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+        <div className="postings-filters">
+          <select value={status} onChange={(e) => setStatus(e.target.value as FilterStatus | "")}>
+            {STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <select value={userStatus} onChange={(e) => setUserStatus(e.target.value as UserStatus | "")}>
+            {USER_STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </header>
 
       <section className="card">
@@ -117,10 +147,7 @@ export default function Postings() {
           <tbody>
             {items.map((p) => (
               <Fragment key={p.id}>
-                <tr
-                  className={p.filter_verdict ? "expandable" : undefined}
-                  onClick={p.filter_verdict ? () => setExpanded(expanded === p.id ? null : p.id) : undefined}
-                >
+                <tr className="expandable" onClick={() => setExpanded(expanded === p.id ? null : p.id)}>
                   <td>
                     {p.url ? (
                       <a href={p.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
@@ -128,6 +155,11 @@ export default function Postings() {
                       </a>
                     ) : (
                       p.title
+                    )}
+                    {p.duplicate_of && (
+                      <StatusPill tone="muted" title="A matching posting from another source was already notified">
+                        dup
+                      </StatusPill>
                     )}
                   </td>
                   <td>
@@ -142,9 +174,12 @@ export default function Postings() {
                   </td>
                   <td>
                     <PostingStatusPill posting={p} />
+                    {p.user_status !== "none" && (
+                      <StatusPill tone="pending">{p.user_status.replace("_", " ")}</StatusPill>
+                    )}
                   </td>
                 </tr>
-                {expanded === p.id && p.filter_verdict && (
+                {expanded === p.id && (
                   <tr className="verdict-row">
                     <td colSpan={8}>
                       <VerdictDetail posting={p} />
@@ -156,7 +191,7 @@ export default function Postings() {
             {items.length === 0 && !isLoading && (
               <tr>
                 <td colSpan={8} className="empty">
-                  {status === "" ? "Nothing extracted yet." : "No postings with this status."}
+                  {status === "" && userStatus === "" ? "Nothing extracted yet." : "No postings match these filters."}
                 </td>
               </tr>
             )}

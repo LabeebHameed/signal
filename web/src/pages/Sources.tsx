@@ -4,7 +4,7 @@ import { api, WatchedPage } from "../api";
 import { StatusPill } from "../components/StatusPill";
 import { useToast } from "../components/Toast";
 import { Toggle } from "../components/Toggle";
-import { timeAgo, timeUntil, truncate } from "../lib/format";
+import { timeAgo, truncate } from "../lib/format";
 
 // A snapshot of which pages a "Check now" run covers and when it started —
 // used to show a live "checking…" state per row instead of the previous
@@ -22,21 +22,6 @@ function isPageChecking(p: WatchedPage, pendingCheck: PendingCheck | null): bool
   if (!pendingCheck || !pendingCheck.ids.has(p.id)) return false;
   if (!p.last_checked_at) return true;
   return new Date(p.last_checked_at).getTime() < pendingCheck.startedAt;
-}
-
-function intervalLabel(minutes: number): string {
-  return minutes >= 60 ? `${Math.round((minutes / 60) * 10) / 10}h` : `${minutes}m`;
-}
-
-/** What the adaptive scheduler is actually doing for this page right now —
- * a healthy page settles into a longer interval the longer it stays
- * unchanged; a failing one backs off exponentially instead of being
- * hammered every cron tick. */
-function cadenceLabel(p: WatchedPage): string {
-  if (p.failure_count > 0) {
-    return `backing off — next try ${timeUntil(p.next_check_at)}`;
-  }
-  return `checking every ${intervalLabel(p.check_interval_minutes)}`;
 }
 
 export default function Sources() {
@@ -166,7 +151,6 @@ export default function Sources() {
               <th>Page</th>
               <th>Active</th>
               <th>Last checked</th>
-              <th>Cadence</th>
               <th>Status</th>
               <th></th>
             </tr>
@@ -187,7 +171,6 @@ export default function Sources() {
                   <td className={checking ? "checking-text" : "muted"}>
                     {checking ? "Checking…" : timeAgo(p.last_checked_at)}
                   </td>
-                  <td className="muted">{p.active ? cadenceLabel(p) : "—"}</td>
                   <td>
                     {checking ? (
                       <StatusPill tone="checking">checking now</StatusPill>
@@ -211,7 +194,7 @@ export default function Sources() {
             })}
             {!isLoading && pages.length === 0 && (
               <tr>
-                <td colSpan={6} className="empty">
+                <td colSpan={5} className="empty">
                   No pages yet — add a careers page above.
                 </td>
               </tr>

@@ -22,7 +22,7 @@
 
 const MAX_CONTENT_CHARS = 100_000;
 
-export type FetchStrategy = "direct" | "direct-alt" | "proxy:pure";
+export type FetchStrategy = "direct" | "direct-alt" | "proxy:pure" | "proxy:jina";
 
 export interface FetchResult {
   content: string;
@@ -51,6 +51,7 @@ const CRAWLER_HEADERS: Record<string, string> = {
 // over the proxy below while adding a paid/rate-limited dependency.)
 const PROXIES: Array<{ name: FetchStrategy; build: (url: string) => string }> = [
   { name: "proxy:pure", build: (url) => `https://pure.md/${url}` },
+  { name: "proxy:jina", build: (url) => `https://r.jina.ai/${url}` },
 ];
 
 // Phrases that mean "this is a block/challenge page, not real content" even

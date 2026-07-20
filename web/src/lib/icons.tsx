@@ -33,18 +33,6 @@ export function MatchesIcon(props: IconProps) {
   );
 }
 
-export function PipelineIcon(props: IconProps) {
-  return (
-    <svg {...base} {...props}>
-      <circle cx="5" cy="6" r="2.5" />
-      <circle cx="12" cy="12" r="2.5" />
-      <circle cx="19" cy="18" r="2.5" />
-      <path d="M7.2 7.5 9.8 10.5" />
-      <path d="M14.2 13.5 16.8 16.5" />
-    </svg>
-  );
-}
-
 export function ProfileIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

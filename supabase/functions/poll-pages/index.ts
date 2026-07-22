@@ -128,6 +128,7 @@ const BLOCKED_COMPANY_VERDICT: PostingVerdict = {
   score: 0,
   summary: "This company is on your blocked list.",
   dealbreaker: "blocked company",
+  title_mismatch: null,
   dimensions: [],
 };
 

@@ -46,6 +46,7 @@ export interface PostingVerdict {
   score: number;
   summary: string;
   dealbreaker: string | null;
+  title_mismatch: string | null;
   dimensions: VerdictDimension[];
 }
 

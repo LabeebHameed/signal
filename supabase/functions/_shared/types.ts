@@ -67,6 +67,11 @@ export interface PostingVerdict {
   summary: string;
   /** Which stated dealbreaker applied, if any — forces a mismatch. */
   dealbreaker: string | null;
+  /** Why the posting's title is a different/broader role than the target
+   * and its equivalents, if it is — forces a mismatch. A shared generic
+   * word (e.g. "Engineer") between the posting and target titles is never
+   * enough on its own to avoid this. */
+  title_mismatch: string | null;
   dimensions: VerdictDimension[];
 }
 

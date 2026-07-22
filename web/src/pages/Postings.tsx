@@ -28,6 +28,7 @@ function VerdictDetail({ posting }: { posting: Posting }) {
       {v && (
         <>
           {v.dealbreaker && <p className="verdict-dealbreaker">⛔ Dealbreaker: {v.dealbreaker}</p>}
+          {v.title_mismatch && <p className="verdict-title-mismatch">🚫 Off-target title: {v.title_mismatch}</p>}
           {v.summary && <p>{v.summary}</p>}
           {v.dimensions.length > 0 && (
             <ul className="verdict-dims">

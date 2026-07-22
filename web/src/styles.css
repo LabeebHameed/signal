@@ -589,6 +589,10 @@ tr.verdict-row td {
   color: var(--danger);
   font-weight: 600;
 }
+.verdict-title-mismatch {
+  color: var(--danger);
+  font-weight: 600;
+}
 .verdict-dims {
   list-style: none;
   margin: 0;

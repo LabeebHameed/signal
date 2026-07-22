@@ -75,6 +75,7 @@ const VERDICTS_SCHEMA = {
           score: { type: "integer", minimum: 0, maximum: 100 },
           summary: { type: "string" },
           dealbreaker: { type: ["string", "null"] },
+          title_mismatch: { type: ["string", "null"] },
           dimensions: {
             type: "array",
             items: {
@@ -89,7 +90,7 @@ const VERDICTS_SCHEMA = {
             },
           },
         },
-        required: ["id", "verdict", "score", "summary", "dealbreaker", "dimensions"],
+        required: ["id", "verdict", "score", "summary", "dealbreaker", "title_mismatch", "dimensions"],
         additionalProperties: false,
       },
     },
@@ -103,6 +104,7 @@ const JUDGE_SYSTEM_PROMPT = `You screen job postings for one job seeker. For eac
 Weigh every dimension the profile speaks to:
 - role: is the actual work behind the title what they want? Read titles the way an industry insider would ("Member of Technical Staff" is usually a software engineer; "Solutions Engineer" is usually pre-sales, not product engineering). Synonymous or adjacent titles can still be strong fits. When the profile lists equivalent/adjacent titles, a posting whose title matches any of them in meaning — not exact wording — is the target role; never require the profile's literal phrasing.
 - seniority: infer the level from the title and any cues (junior/senior/staff/lead/intern, "5+ years") and compare with what they target.
+- title scope (separate from the role dimension above, and a hard boundary — see the "title_mismatch" field below): when the profile states a target role, a posting is IN scope only if its title is the target role itself, one of the profile's listed equivalent/adjacent titles (in meaning), or a seniority/level-qualified variant of either (e.g. Senior/Staff/Principal/Lead/Sr./Jr./II/III/Intern/Associate + the base title, or a team/product qualifier that doesn't change the discipline, like "Front-End Engineer, Growth"). A posting is OUT of scope when its title names a different or broader discipline than the target and its equivalents — a shared generic word like "Engineer" or "Developer" is never enough by itself to put it in scope. Worked example: target role "Front-End Developer" with equivalents like "UI Engineer"/"Design Engineer" — a posting titled "Full Stack Engineer" is OUT of scope (broader role) even though it contains "Engineer"; "Senior Front-End Engineer" or "UI Engineer II" ARE in scope (same role, just a seniority variant). The same logic applies to any other named-different-role trap: "Backend Engineer", "DevOps Engineer", "Mobile Engineer", "Data Engineer", "QA Engineer", "Solutions Engineer", "Engineering Manager" are all out of scope for a target IC engineering role unless explicitly listed as an equivalent. When a title is genuinely generic/bare (e.g. plain "Software Engineer" with no discipline named), you may use the job description only to decide whether the underlying work matches — but once a title already names a specific different or broader role, the description cannot pull it back in scope.
 - location: could they actually work this job given their location and remote constraints? "Remote" with a region restriction only counts if the restriction is compatible.
 - skills: does the stated stack or domain line up with theirs?
 - company: employer type, stage, and industry versus their stated preferences.
@@ -112,6 +114,7 @@ Weigh every dimension the profile speaks to:
 Rules:
 - Missing information is neutral, never disqualifying. Many postings are just a title and a location. Mark dimensions the posting says nothing about as "unknown" and judge on what is visible. Use "mismatch" only when the posting actively contradicts the profile.
 - Dealbreakers are absolute: if one clearly applies, the verdict is "mismatch" no matter how good the rest looks, and "dealbreaker" names which one in a short phrase. Otherwise "dealbreaker" is null. Do not stretch dealbreakers to cover ambiguous cases — an unclear situation is not a dealbreaker.
+- Title scope is equally absolute: if the profile states a target role and the posting's title is out of scope per the rule above, the verdict is "mismatch" no matter how good the rest looks, and "title_mismatch" names the specific different/broader role in a short phrase (e.g. "Full Stack Engineer is broader than the target Front-End Developer role"). Otherwise "title_mismatch" is null — including whenever the profile states no target role.
 - Verdicts: "match" — you would confidently interrupt them: the visible evidence fits and nothing contradicts. "borderline" — plausibly right but genuinely uncertain: thin information, partial fit, or a stretch on one dimension. "mismatch" — someone with this profile would not thank you for this notification.
 - score: overall fit 0–100 given the evidence (100 = ideal, 50 = coin flip, 0 = unrelated). Score and verdict must agree.
 - summary: one or two plain sentences naming the decisive factors. The seeker reads this to trust — or correct — the decision, so be concrete, not generic.
@@ -119,7 +122,7 @@ Rules:
 - If recent feedback from this seeker is provided below, use it only to calibrate genuinely borderline calls (e.g. several "not interested" marks on similar senior IC roles at large companies suggest leaning mismatch on a new one just like them) — it never overrides a clear, direct read of the stated profile, and a single data point is never enough to shift a verdict.
 
 Judge each posting independently, using its [id]. Respond with JSON only:
-{"verdicts": [{"id": 0, "verdict": "match", "score": 85, "summary": "...", "dealbreaker": null, "dimensions": [{"name": "role", "fit": "strong", "note": "..."}]}]}
+{"verdicts": [{"id": 0, "verdict": "match", "score": 85, "summary": "...", "dealbreaker": null, "title_mismatch": null, "dimensions": [{"name": "role", "fit": "strong", "note": "..."}]}]}
 Return exactly one entry per posting.`;
 
 function renderProfile(profile: FilterProfile): string {
@@ -155,7 +158,8 @@ function renderCalibration(calibration: JudgeCalibration): string | null {
     : null;
 }
 
-function asVerdict(item: unknown, count: number): { id: number; verdict: PostingVerdict } | null {
+/** Exported for testing the dealbreaker/title-scope hard-override logic without invoking the LLM. */
+export function asVerdict(item: unknown, count: number): { id: number; verdict: PostingVerdict } | null {
   if (typeof item !== "object" || item === null) return null;
   const v = item as Record<string, unknown>;
   if (typeof v.id !== "number" || !Number.isInteger(v.id) || v.id < 0 || v.id >= count) return null;
@@ -165,6 +169,8 @@ function asVerdict(item: unknown, count: number): { id: number; verdict: Posting
     : 0;
   const dealbreakerRaw = typeof v.dealbreaker === "string" ? v.dealbreaker.trim() : "";
   const dealbreaker = dealbreakerRaw !== "" && !/^(null|none|n\/a)$/i.test(dealbreakerRaw) ? dealbreakerRaw : null;
+  const titleMismatchRaw = typeof v.title_mismatch === "string" ? v.title_mismatch.trim() : "";
+  const titleMismatch = titleMismatchRaw !== "" && !/^(null|none|n\/a)$/i.test(titleMismatchRaw) ? titleMismatchRaw : null;
   const dimensions: VerdictDimension[] = [];
   if (Array.isArray(v.dimensions)) {
     for (const d of v.dimensions) {
@@ -182,12 +188,20 @@ function asVerdict(item: unknown, count: number): { id: number; verdict: Posting
   return {
     id: v.id,
     verdict: {
-      // A named dealbreaker forces a mismatch even if the model's verdict
-      // field disagrees — the two must never contradict in stored data.
-      verdict: dealbreaker !== null ? "mismatch" : (v.verdict as PostingVerdict["verdict"]),
+      // A named dealbreaker, or a title that's out of scope for the target
+      // role, forces a mismatch even if the model's verdict field disagrees
+      // — the two must never contradict in stored data. Title scope is
+      // checked second: it must never be softened by an otherwise-strong
+      // score on the other dimensions.
+      verdict: dealbreaker !== null
+        ? "mismatch"
+        : titleMismatch !== null
+        ? "mismatch"
+        : (v.verdict as PostingVerdict["verdict"]),
       score,
       summary: typeof v.summary === "string" ? v.summary.trim() : "",
       dealbreaker,
+      title_mismatch: titleMismatch,
       dimensions,
     },
   };

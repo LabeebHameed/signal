@@ -64,6 +64,22 @@ export function PostingsIcon(props: IconProps) {
   );
 }
 
+export function WorkflowIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="5" cy="6" r="2.5" />
+      <circle cx="19" cy="6" r="2.5" />
+      <circle cx="12" cy="13" r="2.5" />
+      <circle cx="7" cy="20" r="2.5" />
+      <circle cx="17" cy="20" r="2.5" />
+      <path d="M6.6 8.2 10.2 11.3" />
+      <path d="M17.4 8.2 13.8 11.3" />
+      <path d="M10.5 15 8.5 17.7" />
+      <path d="M13.5 15 15.5 17.7" />
+    </svg>
+  );
+}
+
 export function SettingsIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

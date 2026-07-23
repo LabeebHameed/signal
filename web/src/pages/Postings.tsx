@@ -1,8 +1,9 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
-import { api, FilterStatus, Posting, PostingSort } from "../api";
-import { CompanyBadge, CompanyPanel } from "../components/CompanyPanel";
-import { PostingActions } from "../components/PostingActions";
+import { useSearchParams } from "react-router-dom";
+import { api, FilterStatus, PostingSort } from "../api";
+import { CompanyBadge } from "../components/CompanyPanel";
+import { PostingVerdictDetail } from "../components/PostingVerdictDetail";
 import { PostingStatusPill, VerdictPill } from "../components/PostingStatus";
 import { StatusPill } from "../components/StatusPill";
 import { timeAgo } from "../lib/format";
@@ -17,43 +18,19 @@ const STATUS_OPTIONS: Array<{ value: FilterStatus | ""; label: string }> = [
   { value: "skipped", label: "Not screened" },
 ];
 
-/** The judge's full reasoning for one posting, shown when its row is expanded. */
-function VerdictDetail({ posting }: { posting: Posting }) {
-  const v = posting.filter_verdict;
-  return (
-    <div className="verdict-detail">
-      {posting.duplicate_of && (
-        <p className="hint">Duplicate — a matching posting from another source was already notified.</p>
-      )}
-      {v && (
-        <>
-          {v.dealbreaker && <p className="verdict-dealbreaker">⛔ Dealbreaker: {v.dealbreaker}</p>}
-          {v.title_mismatch && <p className="verdict-title-mismatch">🚫 Off-target title: {v.title_mismatch}</p>}
-          {v.summary && <p>{v.summary}</p>}
-          {v.dimensions.length > 0 && (
-            <ul className="verdict-dims">
-              {v.dimensions.map((d, i) => (
-                <li key={`${d.name}-${i}`}>
-                  <span className={`dim-fit dim-${d.fit}`}>
-                    {d.name}: {d.fit}
-                  </span>
-                  {d.note && <span className="muted"> — {d.note}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
-          <CompanyPanel posting={posting} />
-        </>
-      )}
-      <PostingActions posting={posting} />
-    </div>
-  );
-}
+const VALID_STATUSES: ReadonlyArray<FilterStatus> = ["pending", "matched", "filtered", "skipped"];
 
 export default function Postings() {
+  const [searchParams] = useSearchParams();
   const [sort, setSort] = useState<PostingSort>("first_seen_at");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
-  const [status, setStatus] = useState<FilterStatus | "">("");
+  // Seeds from ?status= (e.g. a "View all in Postings" link from the
+  // Workflow page) once on mount — status itself still lives in local
+  // state afterward, same as the rest of this page's filters.
+  const [status, setStatus] = useState<FilterStatus | "">(() => {
+    const fromUrl = searchParams.get("status");
+    return VALID_STATUSES.includes(fromUrl as FilterStatus) ? (fromUrl as FilterStatus) : "";
+  });
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage, error } = useInfiniteQuery({
@@ -161,7 +138,7 @@ export default function Postings() {
                 {expanded === p.id && (
                   <tr className="verdict-row">
                     <td colSpan={8}>
-                      <VerdictDetail posting={p} />
+                      <PostingVerdictDetail posting={p} />
                     </td>
                   </tr>
                 )}

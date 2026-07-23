@@ -10,6 +10,7 @@ import Postings from "./pages/Postings";
 import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/SettingsPage";
 import Sources from "./pages/Sources";
+import Workflow from "./pages/Workflow";
 
 export default function App() {
   const [hasToken, setHasToken] = useState(Boolean(getToken()));
@@ -33,6 +34,7 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="inbox" element={<InboxPage />} />
             <Route path="matches" element={<Navigate to="/inbox" replace />} />
+            <Route path="workflow" element={<Workflow />} />
             <Route path="sources" element={<Sources />} />
             <Route path="postings" element={<Postings />} />
             <Route path="profile" element={<ProfilePage />} />

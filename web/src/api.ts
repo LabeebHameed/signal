@@ -224,6 +224,18 @@ export const api = {
       sort?: PostingSort;
       order?: "asc" | "desc";
       status?: FilterStatus | "";
+      /** Restrict to postings pulled from one source page. */
+      pageId?: string;
+      companyStatus?: CompanyStatus | "";
+      /** true = actually sent to Telegram; false = never sent. */
+      notified?: boolean;
+      /** true = currently queued for the next notify pass. */
+      pendingNotify?: boolean;
+      /** Combined matched+filtered view — send instead of, not with, status. */
+      screened?: boolean;
+      /** Filtered out OR archived as a cross-source duplicate — the
+       * "Filtered & Archived" node's real membership. */
+      notSent?: boolean;
     } = {},
   ) => {
     const params = new URLSearchParams({
@@ -233,6 +245,12 @@ export const api = {
       order: opts.order ?? "desc",
     });
     if (opts.status) params.set("status", opts.status);
+    if (opts.pageId) params.set("page_id", opts.pageId);
+    if (opts.companyStatus) params.set("company_status", opts.companyStatus);
+    if (opts.notified !== undefined) params.set("notified", String(opts.notified));
+    if (opts.pendingNotify !== undefined) params.set("pending_notify", String(opts.pendingNotify));
+    if (opts.screened) params.set("screened", "true");
+    if (opts.notSent) params.set("not_sent", "true");
     return request<PostingsPage>(`/postings?${params}`);
   },
   updatePostingStatus: (id: string, userStatus: UserStatus) =>

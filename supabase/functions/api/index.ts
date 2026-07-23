@@ -23,7 +23,14 @@
 //   GET    /postings              postings with filter + sort + pagination:
 //                                 ?limit=50&offset=0&sort=first_seen_at|posted_at|title|company|filter_score|notified_at
 //                                 &order=asc|desc&status=pending|matched|filtered|skipped
+//                                 &page_id=<uuid>&company_status=none|pending|ok|warned
+//                                 &notified=true|false&pending_notify=true|false
+//                                 &screened=true (matched+filtered, for a combined pass/fail view)
+//                                 &not_sent=true (filtered OR archived as a cross-source duplicate)
 //                                 → { items, total }
+//                                 (the extra filters are for the Workflow page's per-stage
+//                                 audit rosters — send at most one of status/screened/not_sent
+//                                 per request, they override rather than intersect)
 //   PATCH  /postings/:id          { user_status } record what the seeker did with a
 //                                 posting (interested/not_interested/applied/...) —
 //                                 feeds back into the judge's calibration context
@@ -274,6 +281,13 @@ Deno.serve(async (req: Request) => {
       const sort = sortable.includes(params.get("sort") ?? "") ? params.get("sort")! : "first_seen_at";
       const ascending = params.get("order") === "asc";
       const status = params.get("status") ?? "";
+      const pageId = params.get("page_id") ?? "";
+      const companyStatus = params.get("company_status") ?? "";
+      const notified = params.get("notified");
+      const pendingNotify = params.get("pending_notify");
+      const screened = params.get("screened") === "true";
+      const notSent = params.get("not_sent") === "true";
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       let query = db
         .from("postings")
         .select(
@@ -283,6 +297,19 @@ Deno.serve(async (req: Request) => {
       if (["pending", "matched", "filtered", "skipped"].includes(status)) {
         query = query.eq("filter_status", status);
       }
+      if (pageId && UUID_RE.test(pageId)) query = query.eq("page_id", pageId);
+      if (["none", "pending", "ok", "warned"].includes(companyStatus)) {
+        query = query.eq("company_status", companyStatus);
+      }
+      if (notified === "true") query = query.not("notified_at", "is", null);
+      else if (notified === "false") query = query.is("notified_at", null);
+      if (pendingNotify === "true") query = query.eq("pending_notify", true);
+      else if (pendingNotify === "false") query = query.eq("pending_notify", false);
+      // screened/not_sent are combined views for the Workflow page's audit
+      // rosters — they override the plain filter_status match above rather
+      // than intersecting with it (a request should only send one).
+      if (screened) query = query.in("filter_status", ["matched", "filtered"]);
+      if (notSent) query = query.or("filter_status.eq.filtered,duplicate_of.not.is.null");
       const { data, error, count } = await query
         .order(sort, { ascending, nullsFirst: false })
         .order("id") // deterministic tiebreaker so pages don't overlap

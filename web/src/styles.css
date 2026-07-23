@@ -864,6 +864,167 @@ tr.verdict-row td {
   display: flex;
   gap: 0.5rem;
 }
+
+/* ---------- Workflow page ---------- */
+
+.content-wide {
+  max-width: 1600px;
+}
+.workflow-split {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 1.5rem;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .workflow-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.wf-graph {
+  position: relative;
+  display: flex;
+  gap: 3rem;
+  min-height: 360px;
+  padding: 1rem 0.5rem;
+  overflow-x: auto;
+}
+.wf-col {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 160px;
+  position: relative;
+  z-index: 1;
+}
+.wf-col-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  text-align: center;
+  margin-bottom: 0.25rem;
+}
+.wf-connectors {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
+.wf-connectors path {
+  stroke: var(--border);
+  stroke-width: 1.5;
+  fill: none;
+}
+
+.wf-node {
+  display: block;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.7rem 0.9rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--fg);
+  text-decoration: none;
+}
+.wf-node:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+.wf-node.selected {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.wf-node.disabled {
+  opacity: 0.55;
+}
+.wf-node.wf-node-more {
+  border-style: dashed;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.8rem;
+}
+.wf-node-title {
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+}
+.wf-node-badge {
+  font-size: 0.75rem;
+}
+
+.wf-sidebar {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+}
+.wf-back {
+  margin-bottom: 1rem;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.7rem;
+}
+
+.wf-tabs {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.9rem;
+  flex-wrap: wrap;
+}
+.wf-tab {
+  font-size: 0.78rem;
+  padding: 0.35rem 0.65rem;
+}
+
+.wf-roster {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.wf-roster-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.wf-roster-row:hover {
+  border-color: var(--accent);
+}
+.wf-roster-row-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.wf-roster-row-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-roster-row-sub {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--fg-muted);
+  font-size: 0.76rem;
+  margin-top: 0.2rem;
+}
+.wf-roster-row .verdict-detail {
+  margin-top: 0.6rem;
+  cursor: default;
+}
+
 /* ---------- Error boundary ---------- */
 
 .error-screen {

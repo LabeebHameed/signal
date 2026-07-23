@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   DashboardIcon,
   MatchesIcon,
@@ -6,11 +6,13 @@ import {
   ProfileIcon,
   SettingsIcon,
   SourcesIcon,
+  WorkflowIcon,
 } from "../lib/icons";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: DashboardIcon, end: true },
   { to: "/inbox", label: "Inbox", icon: MatchesIcon, end: false },
+  { to: "/workflow", label: "Workflow", icon: WorkflowIcon, end: false },
   { to: "/sources", label: "Sources", icon: SourcesIcon, end: false },
   { to: "/postings", label: "Postings", icon: PostingsIcon, end: false },
   { to: "/profile", label: "Profile", icon: ProfileIcon, end: false },
@@ -18,6 +20,9 @@ const NAV_ITEMS = [
 ];
 
 export default function Layout({ onLogout }: { onLogout: () => void }) {
+  // The Workflow page's graph + sidebar split needs more room than the
+  // standard reading-width pages, so it opts into a wider content column.
+  const isWorkflow = useLocation().pathname === "/workflow";
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -37,7 +42,7 @@ export default function Layout({ onLogout }: { onLogout: () => void }) {
           Log out
         </button>
       </aside>
-      <main className="content">
+      <main className={`content${isWorkflow ? " content-wide" : ""}`}>
         <Outlet />
       </main>
     </div>

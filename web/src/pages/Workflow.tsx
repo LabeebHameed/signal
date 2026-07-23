@@ -49,6 +49,10 @@ function useFunnelCounts(): FunnelCounts {
     queryKey: ["postings", "workflow", "count", "companyPending"],
     queryFn: () => api.listPostings({ limit: 1, companyStatus: "pending" }),
   });
+  const blocked = useQuery({
+    queryKey: ["postings", "workflow", "count", "blocked"],
+    queryFn: () => api.listPostings({ limit: 1, status: "filtered", blocked: true }),
+  });
 
   return {
     total: total.data?.total ?? 0,
@@ -61,6 +65,7 @@ function useFunnelCounts(): FunnelCounts {
     notSent: notSent.data?.total ?? 0,
     companyWarned: companyWarned.data?.total ?? 0,
     companyPending: companyPending.data?.total ?? 0,
+    blocked: blocked.data?.total ?? 0,
   };
 }
 
@@ -82,7 +87,7 @@ export default function Workflow() {
       </header>
 
       <div className="workflow-split">
-        <section className="card">
+        <section className="card wf-canvas-card">
           <WorkflowGraph pages={pages} settings={settings} counts={counts} selected={selected} onSelect={setSelected} />
         </section>
         <aside className="card wf-sidebar">

@@ -31,38 +31,55 @@ function Tabs<T extends string>({
   );
 }
 
+const LEGEND: Array<{ color: string; label: string }> = [
+  { color: "blue", label: "Source" },
+  { color: "amber", label: "Screening" },
+  { color: "teal", label: "Agent / Qualify" },
+  { color: "purple", label: "Notify" },
+  { color: "gray", label: "Output" },
+];
+
 function FunnelOverview({ counts }: { counts: FunnelCounts }) {
+  const screened = counts.matched + counts.filtered;
+  const inPipeline = counts.pending + counts.companyPending + counts.pendingNotify;
+  const max = Math.max(counts.total, 1);
+  const rows: Array<{ label: string; value: number; color: string }> = [
+    { label: "Scanned", value: counts.total, color: "blue" },
+    { label: "Screened", value: screened, color: "amber" },
+    { label: "Matched", value: counts.matched, color: "teal" },
+    { label: "Notified", value: counts.notified, color: "purple" },
+    { label: "In pipeline", value: inPipeline, color: "gray" },
+  ];
   return (
     <>
       <div className="card-header">
         <h2>Funnel overview</h2>
       </div>
-      <p className="hint">Click any node in the graph to see exactly what happened at that step and why.</p>
-      <div className="stat-grid wf-overview-stats">
-        <div className="stat-card">
-          <span className="stat-value">{counts.total}</span>
-          <span className="stat-label">Extracted</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-value">{counts.pending}</span>
-          <span className="stat-label">Awaiting screening</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-value">{counts.matched}</span>
-          <span className="stat-label">Matched</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-value">{counts.filtered}</span>
-          <span className="stat-label">Filtered</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-value">{counts.notified}</span>
-          <span className="stat-label">Notified</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-value">{counts.pendingNotify}</span>
-          <span className="stat-label">Queued</span>
-        </div>
+      <p className="hint">Click any node in the canvas to see exactly what happened at that step and why.</p>
+      <div className="wf-funnel">
+        {rows.map((r) => (
+          <div className="wf-funnel-row" key={r.label}>
+            <div className="wf-funnel-row-top">
+              <span>{r.label}</span>
+              <span className="wf-funnel-value">{r.value}</span>
+            </div>
+            <div className="wf-funnel-bar">
+              <div
+                className={`wf-funnel-bar-fill wf-funnel-bar-${r.color}`}
+                style={{ width: `${Math.min(100, (r.value / max) * 100)}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="wf-legend">
+        <div className="wf-legend-title">Legend</div>
+        {LEGEND.map((l) => (
+          <div className="wf-legend-row" key={l.label}>
+            <span className={`wf-legend-dot wf-legend-dot-${l.color}`} />
+            {l.label}
+          </div>
+        ))}
       </div>
     </>
   );
@@ -100,39 +117,71 @@ function SourcePanel({ pageId, label, pages }: { pageId: string; label: string; 
   );
 }
 
-function ScreenPanel({ counts }: { counts: FunnelCounts }) {
-  const [tab, setTab] = useState<"filtered" | "matched" | "all">("filtered");
+function ScreeningPanel({ counts }: { counts: FunnelCounts }) {
   const { data, isLoading } = useQuery({
-    queryKey: ["postings", "workflow", "screen", tab],
-    queryFn: () =>
-      tab === "all"
-        ? api.listPostings({ screened: true, limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" })
-        : api.listPostings({ status: tab, limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" }),
+    queryKey: ["postings", "workflow", "screening"],
+    queryFn: () => api.listPostings({ status: "filtered", blocked: true, limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" }),
   });
   return (
     <>
       <div className="card-header">
-        <h2>Screen &amp; Score</h2>
+        <h2>Screening</h2>
       </div>
       <p className="hint">
-        The AI judge's verdict on every screened posting — the exact stored reason (dealbreaker, off-target title,
-        or per-dimension fit), never a fresh explanation.
+        The deterministic blocked-company check — no LLM call, no scoring. A posting rejected here never reaches the
+        AI judge.
+      </p>
+      <PostingRoster
+        items={data?.items ?? []}
+        total={counts.blocked}
+        isLoading={isLoading}
+        emptyLabel="Nothing blocked yet."
+      />
+    </>
+  );
+}
+
+function JudgePanel({ counts }: { counts: FunnelCounts }) {
+  const [tab, setTab] = useState<"failed" | "passed">("failed");
+  const failedTotal = Math.max(0, counts.filtered - counts.blocked);
+  const { data, isLoading } = useQuery({
+    queryKey: ["postings", "workflow", "judge", tab],
+    queryFn: () =>
+      tab === "passed"
+        ? api.listPostings({ status: "matched", limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" })
+        // Fetch extra so filtering out the (rare) blocked-company rows still
+        // leaves a full page — screening rejects never reach this node.
+        : api.listPostings({ status: "filtered", limit: ROSTER_LIMIT * 2, sort: "first_seen_at", order: "desc" }),
+  });
+  const items =
+    tab === "failed"
+      ? (data?.items ?? []).filter((p) => p.filter_verdict?.dealbreaker !== "blocked company").slice(0, ROSTER_LIMIT)
+      : data?.items ?? [];
+  const total = tab === "failed" ? failedTotal : counts.matched;
+
+  return (
+    <>
+      <div className="card-header">
+        <h2>AI Judge</h2>
+      </div>
+      <p className="hint">
+        The LLM's verdict on every posting that cleared screening — the exact stored reason (dealbreaker, off-target
+        title, or per-dimension fit), never a fresh explanation.
       </p>
       <Tabs
         value={tab}
         onChange={setTab}
         options={[
-          { value: "filtered", label: `Failed (${counts.filtered})` },
-          { value: "matched", label: `Passed (${counts.matched})` },
-          { value: "all", label: "All" },
+          { value: "failed", label: `Failed (${failedTotal})` },
+          { value: "passed", label: `Passed (${counts.matched})` },
         ]}
       />
       <PostingRoster
-        items={data?.items ?? []}
-        total={data?.total ?? 0}
+        items={items}
+        total={total}
         isLoading={isLoading}
         emptyLabel="Nothing here yet."
-        viewAllHref={tab === "all" ? undefined : `/postings?status=${tab}`}
+        viewAllHref={tab === "passed" ? "/postings?status=matched" : "/postings?status=filtered"}
       />
     </>
   );
@@ -205,7 +254,7 @@ function FilteredPanel({ counts }: { counts: FunnelCounts }) {
         <h2>Filtered &amp; Archived</h2>
       </div>
       <p className="hint">
-        Postings the judge rejected
+        Postings rejected by screening or the AI judge
         {duplicateCount > 0 ? `, plus ${duplicateCount} repost${duplicateCount === 1 ? "" : "s"} suppressed as a duplicate of an already-notified job` : ""}.
       </p>
       <PostingRoster
@@ -235,8 +284,10 @@ export function WorkflowInspector({
       return <FunnelOverview counts={counts} />;
     case "source":
       return <SourcePanel pageId={state.pageId} label={state.label} pages={pages} />;
-    case "screen":
-      return <ScreenPanel counts={counts} />;
+    case "screening":
+      return <ScreeningPanel counts={counts} />;
+    case "judge":
+      return <JudgePanel counts={counts} />;
     case "company":
       return (
         <CompanyQualifyPanel

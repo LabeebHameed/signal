@@ -236,6 +236,9 @@ export const api = {
       /** Filtered out OR archived as a cross-source duplicate — the
        * "Filtered & Archived" node's real membership. */
       notSent?: boolean;
+      /** Filtered specifically by the deterministic blocked-company check
+       * (as opposed to the AI judge) — combine with status:"filtered". */
+      blocked?: boolean;
     } = {},
   ) => {
     const params = new URLSearchParams({
@@ -251,6 +254,7 @@ export const api = {
     if (opts.pendingNotify !== undefined) params.set("pending_notify", String(opts.pendingNotify));
     if (opts.screened) params.set("screened", "true");
     if (opts.notSent) params.set("not_sent", "true");
+    if (opts.blocked) params.set("blocked", "true");
     return request<PostingsPage>(`/postings?${params}`);
   },
   updatePostingStatus: (id: string, userStatus: UserStatus) =>

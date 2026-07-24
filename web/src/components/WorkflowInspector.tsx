@@ -250,8 +250,9 @@ function DuplicatesPanel({ counts }: { counts: FunnelCounts }) {
         <h2>Duplicate Checker</h2>
       </div>
       <p className="hint">
-        Right before sending, a matched posting is checked against everything already notified from another source in
-        the last 14 days. A recognized repost is suppressed here — never sent twice.
+        Right after a posting matches, it's checked against everything already notified from another source in the
+        last 14 days — before spending any company research on it. A recognized repost is suppressed here, never
+        sent twice.
       </p>
       <PostingRoster
         items={data?.items ?? []}

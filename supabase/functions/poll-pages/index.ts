@@ -162,7 +162,7 @@ async function screenPending(
 ): Promise<string | null> {
   const { data: rows, error } = await db
     .from("postings")
-    .select("id, title, url, company, location, posted_at, posted_text, compensation")
+    .select("id, title, url, company, location, posted_at, posted_text, compensation, content_key")
     .eq("page_id", page.id)
     .eq("filter_status", "pending")
     .order("first_seen_at")
@@ -202,17 +202,59 @@ async function screenPending(
     const notify = (verdict.verdict === "match" ||
       (verdict.verdict === "borderline" && cfg.filterMode === "balanced")) &&
       verdict.score >= cfg.minScore;
+    // Cross-source dedup runs right here, before company research — a
+    // recognized repost is suppressed immediately instead of spending a
+    // Tavily search + LLM dossier call researching a company for a posting
+    // that's never going to be sent anyway.
+    let duplicateOf: string | null = null;
+    if (notify && openRows[i].content_key) {
+      const dup = await findDuplicateNotification(db, openRows[i].id, openRows[i].content_key!);
+      if (dup.error) return dup.error;
+      duplicateOf = dup.duplicateOf;
+    }
     const { error: updateError } = await db.from("postings").update({
       filter_status: notify ? "matched" : "filtered",
       filter_score: verdict.score,
       filter_verdict: verdict,
-      ...(notify ? routeToNotify(openRows[i].company ?? fallback, layerActive) : { pending_notify: false }),
+      ...(duplicateOf
+        ? { duplicate_of: duplicateOf, pending_notify: false }
+        : notify
+        ? routeToNotify(openRows[i].company ?? fallback, layerActive)
+        : { pending_notify: false }),
     }).eq("id", openRows[i].id);
     if (updateError) return `save verdict failed: ${updateError.message}`;
     result.screened++;
     if (!notify) result.filteredOut++;
   }
   return null;
+}
+
+/**
+ * Cross-source dedup lookup: has an equivalent job (same content_key)
+ * already been notified from a different posting within the dedupe window?
+ * Read-only — the caller applies the result. Checked in two places: right
+ * after the judge marks a posting "matched" (screenPending, so a recognized
+ * repost skips company research entirely) and again right before sending
+ * (notifyPending, a final safety net against postings from different
+ * sources racing through the pipeline concurrently in the same run).
+ */
+async function findDuplicateNotification(
+  db: SupabaseClient,
+  postingId: string,
+  contentKey: string,
+): Promise<{ duplicateOf: string | null; error: string | null }> {
+  const windowStart = new Date(Date.now() - CONTENT_DEDUPE_WINDOW_MS).toISOString();
+  const { data, error } = await db
+    .from("postings")
+    .select("id")
+    .eq("content_key", contentKey)
+    .not("notified_at", "is", null)
+    .neq("id", postingId)
+    .gte("notified_at", windowStart)
+    .limit(1)
+    .maybeSingle();
+  if (error) return { duplicateOf: null, error: `duplicate check failed: ${error.message}` };
+  return { duplicateOf: data?.id ?? null, error: null };
 }
 
 async function loadCompany(db: SupabaseClient, normName: string): Promise<CompanyRow | null> {
@@ -412,23 +454,15 @@ async function notifyPending(
     if (claimError) return `claim notification failed: ${claimError.message}`;
     if (!claimed || claimed.length === 0) continue; // another run already claimed it
 
-    // Cross-source dedup: the same job posted to a different watched page may
-    // already have been notified recently under a different row entirely —
-    // never send the same job twice just because two boards carry it.
+    // Cross-source dedup safety net: screenPending already checks this right
+    // after the judge marks a posting "matched", but two postings from
+    // different sources can still race through the pipeline concurrently in
+    // the same run — recheck right before send so neither slips through.
     if (row.content_key) {
-      const windowStart = new Date(Date.now() - CONTENT_DEDUPE_WINDOW_MS).toISOString();
-      const { data: priorNotified, error: dupError } = await db
-        .from("postings")
-        .select("id")
-        .eq("content_key", row.content_key)
-        .not("notified_at", "is", null)
-        .neq("id", row.id)
-        .gte("notified_at", windowStart)
-        .limit(1)
-        .maybeSingle();
-      if (dupError) return `duplicate check failed: ${dupError.message}`;
-      if (priorNotified) {
-        await db.from("postings").update({ duplicate_of: priorNotified.id }).eq("id", row.id);
+      const dup = await findDuplicateNotification(db, row.id, row.content_key);
+      if (dup.error) return dup.error;
+      if (dup.duplicateOf) {
+        await db.from("postings").update({ duplicate_of: dup.duplicateOf }).eq("id", row.id);
         continue; // already notified from another source recently — skip silently
       }
     }

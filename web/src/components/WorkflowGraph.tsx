@@ -217,9 +217,26 @@ function buildGraph(
   });
 
   nodes.push({
-    id: "company",
+    id: "duplicates",
     type: "pipeline",
     position: { x: spineX, y: ROW_GAP * 2 },
+    data: {
+      title: "Duplicate Checker",
+      subtitle: "Cross-source repost check",
+      badge: "FILTER",
+      color: "teal",
+      stat: `${counts.duplicates} suppressed`,
+      icon: "copy",
+      selected: isSelected("duplicates"),
+    },
+    draggable: false,
+    width: NODE_WIDTH,
+  });
+
+  nodes.push({
+    id: "company",
+    type: "pipeline",
+    position: { x: spineX, y: ROW_GAP * 3 },
     data: {
       title: "Company Qualify",
       subtitle: "Research & caution",
@@ -229,23 +246,6 @@ function buildGraph(
       icon: "building",
       disabled: !companyActive,
       selected: isSelected("company"),
-    },
-    draggable: false,
-    width: NODE_WIDTH,
-  });
-
-  nodes.push({
-    id: "duplicates",
-    type: "pipeline",
-    position: { x: spineX, y: ROW_GAP * 3 },
-    data: {
-      title: "Duplicate Checker",
-      subtitle: "Cross-source repost check",
-      badge: "FILTER",
-      color: "teal",
-      stat: `${counts.duplicates} suppressed`,
-      icon: "copy",
-      selected: isSelected("duplicates"),
     },
     draggable: false,
     width: NODE_WIDTH,
@@ -286,11 +286,11 @@ function buildGraph(
   });
 
   edges.push(
-    { id: "e-judge-company", source: "judge", sourceHandle: "down", target: "company", type: "pipeline", data: { label: "pass", tone: "ok" } },
+    { id: "e-judge-duplicates", source: "judge", sourceHandle: "down", target: "duplicates", type: "pipeline", data: { label: "pass", tone: "ok" } },
     { id: "e-judge-filtered", source: "judge", sourceHandle: "right", target: "filtered", type: "pipeline", data: { label: "fail", tone: "skip" } },
-    { id: "e-company-duplicates", source: "company", sourceHandle: "down", target: "duplicates", type: "pipeline" },
-    { id: "e-duplicates-notified", source: "duplicates", sourceHandle: "down", target: "notified", type: "pipeline", data: { label: "unique", tone: "ok" } },
+    { id: "e-duplicates-company", source: "duplicates", sourceHandle: "down", target: "company", type: "pipeline", data: { label: "unique", tone: "ok" } },
     { id: "e-duplicates-filtered", source: "duplicates", sourceHandle: "right", target: "filtered", type: "pipeline", data: { label: "duplicate", tone: "skip" } },
+    { id: "e-company-notified", source: "company", sourceHandle: "down", target: "notified", type: "pipeline" },
   );
 
   return { nodes, edges };

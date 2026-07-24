@@ -8,6 +8,14 @@ function escapeAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, "&quot;");
 }
 
+/** Defense-in-depth against Telegram's 4096-char message cap: extraction
+ * already caps these fields (see llm.ts), but this guards against any other
+ * source of an oversized value ever reaching a send — one bad field must
+ * never be able to block a whole page's notify queue again. */
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
 /**
  * Every bot token is shaped "<bot_id>:<secret>" and a bot's own numeric ID
  * looks exactly like a valid chat ID. Pasting the bot ID into the chat-ID
@@ -80,25 +88,26 @@ export function formatPostingMessage(posting: {
   filter_verdict?: Pick<PostingVerdict, "summary"> | null;
 }, pageLabel: string, companyInfo?: CompanyInfo | null): string {
   const lines: string[] = [];
-  lines.push(`\u{1F514}  ${escapeHtml(posting.title)}`);
+  lines.push(`\u{1F514}  ${escapeHtml(truncate(posting.title, 300))}`);
   lines.push("");
 
   const companyName = companyInfo?.display_name || posting.company;
   if (companyName) {
-    lines.push(`\u{1F3E2}  ${escapeHtml(companyName)}`);
+    lines.push(`\u{1F3E2}  ${escapeHtml(truncate(companyName, 150))}`);
   }
   if (posting.compensation) {
-    lines.push(`\u{1F4B0}  ${escapeHtml(posting.compensation)}`);
+    lines.push(`\u{1F4B0}  ${escapeHtml(truncate(posting.compensation, 150))}`);
   }
   if (posting.location) {
-    lines.push(`\u{1F4CD}  ${escapeHtml(posting.location)}`);
+    lines.push(`\u{1F4CD}  ${escapeHtml(truncate(posting.location, 150))}`);
   }
 
   lines.push("");
+  const truncatedPageLabel = truncate(pageLabel, 100);
   if (posting.url) {
-    lines.push(`${escapeHtml(pageLabel)} - <a href="${escapeAttr(posting.url)}">See Job Post</a>`);
+    lines.push(`${escapeHtml(truncatedPageLabel)} - <a href="${escapeAttr(posting.url)}">See Job Post</a>`);
   } else if (pageLabel) {
-    lines.push(escapeHtml(pageLabel));
+    lines.push(escapeHtml(truncatedPageLabel));
   }
   lines.push("_________________________________");
 

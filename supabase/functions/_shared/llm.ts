@@ -49,7 +49,7 @@ Return every individual job posting visible in the content. For each posting inc
 - location: the location(s) shown for the posting, verbatim
 - posted_text: if the page shows when the job was posted (e.g. "2 days ago", "Posted Mar 3", "3h"), that text verbatim
 - posted_at: the same posted date as an ISO date (YYYY-MM-DD), computed from today's date when the page shows a relative time. Omit if the page shows no posted date — never guess.
-- compensation: pay/salary as shown for the posting, verbatim (e.g. "$150K - $200K", "$45/hr"). Omit if the page shows no pay for this posting — never estimate or guess.
+- compensation: ONLY the pay figure/range as shown for the posting, verbatim (e.g. "$150K - $200K", "$45/hr") — never tags, categories, skills, or any other page metadata, even if it appears near the posting. Omit if the page shows no pay for this posting — never estimate or guess.
 
 Do NOT filter, judge, or deduplicate beyond obvious exact repeats. Do NOT invent postings or fields that are not in the content. Navigation links, department headers, and generic buttons are not postings.
 
@@ -121,6 +121,16 @@ function parseJson(text: string): unknown {
   return JSON.parse(cleaned);
 }
 
+// A real compensation/location string is always short — a model occasionally
+// misassigns a whole tag cloud or sidebar into one of these fields instead of
+// omitting it. Past this length it's not pay/location data, it's noise:
+// dropped rather than trusted (this is what let one 7000+ char "compensation"
+// value reach Telegram and blow past its 4096-char message limit, silently
+// blocking every other queued notification behind it on that page).
+const MAX_COMPENSATION_CHARS = 100;
+const MAX_LOCATION_CHARS = 200;
+const MAX_TITLE_CHARS = 300;
+
 function validatePostings(parsed: unknown): ExtractedPosting[] {
   if (typeof parsed !== "object" || parsed === null || !Array.isArray((parsed as { postings?: unknown }).postings)) {
     throw new Error("LLM response is not of shape {postings: [...]}");
@@ -133,14 +143,16 @@ function validatePostings(parsed: unknown): ExtractedPosting[] {
     const postedAt = typeof p.posted_at === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.posted_at.trim())
       ? p.posted_at.trim()
       : undefined;
+    const location = typeof p.location === "string" ? p.location.trim() : "";
+    const compensation = typeof p.compensation === "string" ? p.compensation.trim() : "";
     out.push({
-      title: p.title.trim(),
+      title: p.title.trim().slice(0, MAX_TITLE_CHARS),
       url: typeof p.url === "string" && p.url.trim() !== "" ? p.url.trim() : undefined,
       company: typeof p.company === "string" && p.company.trim() !== "" ? p.company.trim() : undefined,
-      location: typeof p.location === "string" && p.location.trim() !== "" ? p.location.trim() : undefined,
+      location: location !== "" && location.length <= MAX_LOCATION_CHARS ? location : undefined,
       posted_at: postedAt,
       posted_text: typeof p.posted_text === "string" && p.posted_text.trim() !== "" ? p.posted_text.trim() : undefined,
-      compensation: typeof p.compensation === "string" && p.compensation.trim() !== "" ? p.compensation.trim() : undefined,
+      compensation: compensation !== "" && compensation.length <= MAX_COMPENSATION_CHARS ? compensation : undefined,
     });
   }
   return out;

@@ -33,7 +33,6 @@ function Tabs<T extends string>({
 
 const LEGEND: Array<{ color: string; label: string }> = [
   { color: "blue", label: "Source" },
-  { color: "amber", label: "Screening" },
   { color: "teal", label: "Agent / Qualify" },
   { color: "purple", label: "Notify" },
   { color: "gray", label: "Output" },
@@ -164,47 +163,17 @@ function SourcePanel({ pageId, label, pages }: { pageId: string; label: string; 
   );
 }
 
-function ScreeningPanel({ counts }: { counts: FunnelCounts }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["postings", "workflow", "screening"],
-    queryFn: () => api.listPostings({ status: "filtered", blocked: true, limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" }),
-  });
-  return (
-    <>
-      <div className="card-header">
-        <h2>Screening</h2>
-      </div>
-      <p className="hint">
-        The deterministic blocked-company check — no LLM call, no scoring. A posting rejected here never reaches the
-        AI judge.
-      </p>
-      <PostingRoster
-        items={data?.items ?? []}
-        total={counts.blocked}
-        isLoading={isLoading}
-        emptyLabel="Nothing blocked yet."
-      />
-    </>
-  );
-}
-
 function JudgePanel({ counts }: { counts: FunnelCounts }) {
   const [tab, setTab] = useState<"failed" | "passed">("failed");
-  const failedTotal = Math.max(0, counts.filtered - counts.blocked);
   const { data, isLoading } = useQuery({
     queryKey: ["postings", "workflow", "judge", tab],
     queryFn: () =>
       tab === "passed"
         ? api.listPostings({ status: "matched", limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" })
-        // Fetch extra so filtering out the (rare) blocked-company rows still
-        // leaves a full page — screening rejects never reach this node.
-        : api.listPostings({ status: "filtered", limit: ROSTER_LIMIT * 2, sort: "first_seen_at", order: "desc" }),
+        : api.listPostings({ status: "filtered", limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" }),
   });
-  const items =
-    tab === "failed"
-      ? (data?.items ?? []).filter((p) => !p.blocked_by_screening).slice(0, ROSTER_LIMIT)
-      : data?.items ?? [];
-  const total = tab === "failed" ? failedTotal : counts.matched;
+  const items = data?.items ?? [];
+  const total = tab === "failed" ? counts.filtered : counts.matched;
 
   return (
     <>
@@ -212,14 +181,14 @@ function JudgePanel({ counts }: { counts: FunnelCounts }) {
         <h2>AI Judge</h2>
       </div>
       <p className="hint">
-        The LLM's verdict on every posting that cleared screening — the exact stored reason (dealbreaker, off-target
+        The LLM's verdict on every posting from every source — the exact stored reason (dealbreaker, off-target
         title, or per-dimension fit), never a fresh explanation.
       </p>
       <Tabs
         value={tab}
         onChange={setTab}
         options={[
-          { value: "failed", label: `Failed (${failedTotal})` },
+          { value: "failed", label: `Failed (${counts.filtered})` },
           { value: "passed", label: `Passed (${counts.matched})` },
         ]}
       />
@@ -301,7 +270,7 @@ function FilteredPanel({ counts }: { counts: FunnelCounts }) {
         <h2>Filtered &amp; Archived</h2>
       </div>
       <p className="hint">
-        Postings rejected by screening or the AI judge
+        Postings rejected by the AI judge
         {duplicateCount > 0 ? `, plus ${duplicateCount} repost${duplicateCount === 1 ? "" : "s"} suppressed as a duplicate of an already-notified job` : ""}.
       </p>
       <PostingRoster
@@ -331,8 +300,6 @@ export function WorkflowInspector({
       return <FunnelOverview counts={counts} />;
     case "source":
       return <SourcePanel pageId={state.pageId} label={state.label} pages={pages} />;
-    case "screening":
-      return <ScreeningPanel counts={counts} />;
     case "judge":
       return <JudgePanel counts={counts} />;
     case "company":

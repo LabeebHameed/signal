@@ -105,9 +105,6 @@ export interface Posting {
   filter_status: FilterStatus;
   filter_score: number | null;
   filter_verdict: PostingVerdict | null;
-  /** True when filter_status='filtered' came from the deterministic
-   * blocked-company check ("Screening") rather than the AI judge. */
-  blocked_by_screening: boolean;
   company_status: CompanyStatus;
   company_verdict: CompanyVerdict | null;
   user_status: UserStatus;
@@ -239,9 +236,6 @@ export const api = {
       /** Filtered out OR archived as a cross-source duplicate — the
        * "Filtered & Archived" node's real membership. */
       notSent?: boolean;
-      /** Filtered specifically by the deterministic blocked-company check
-       * (as opposed to the AI judge) — combine with status:"filtered". */
-      blocked?: boolean;
     } = {},
   ) => {
     const params = new URLSearchParams({
@@ -257,7 +251,6 @@ export const api = {
     if (opts.pendingNotify !== undefined) params.set("pending_notify", String(opts.pendingNotify));
     if (opts.screened) params.set("screened", "true");
     if (opts.notSent) params.set("not_sent", "true");
-    if (opts.blocked) params.set("blocked", "true");
     return request<PostingsPage>(`/postings?${params}`);
   },
   updatePostingStatus: (id: string, userStatus: UserStatus) =>

@@ -27,7 +27,6 @@ import type {
   CompanyRow,
   CompanyVerdict,
   ExtractedPosting,
-  PostingVerdict,
   RuntimeConfig,
   Settings,
   WatchedPage,
@@ -43,11 +42,9 @@ import { judgePostings, profileHasContent } from "../_shared/judge.ts";
 import {
   companyLayerActive,
   dossierIsFresh,
-  isCompanyBlocked,
   judgeCompanies,
   MAX_COMPANY_RESEARCH_FAILURES,
   normalizeCompanyName,
-  parseBlockedCompanies,
   researchCompany,
   researchRetryDue,
 } from "../_shared/company.ts";
@@ -123,15 +120,6 @@ function routeToNotify(companyName: string | null, layerActive: boolean): {
   return { pending_notify: true };
 }
 
-const BLOCKED_COMPANY_VERDICT: PostingVerdict = {
-  verdict: "mismatch",
-  score: 0,
-  summary: "This company is on your blocked list.",
-  dealbreaker: "blocked company",
-  title_mismatch: null,
-  dimensions: [],
-};
-
 // Postings marked with one of these carry a real signal about match quality
 // (the seeker engaged, or explicitly said no); "rejected" is excluded — an
 // employer's decision isn't a comment on whether the match itself was good.
@@ -160,10 +148,6 @@ async function loadCalibration(db: SupabaseClient): Promise<JudgeCalibration> {
  * is active); misses are kept with their verdict but stay silent. Nothing is
  * ever deleted — every decision is auditable in the UI.
  *
- * Blocked companies are an absolute override, checked before anything else
- * and regardless of filter mode: the user already made that call explicit,
- * so it costs no LLM call and can't be second-guessed by a judge verdict.
- *
  * A judge failure is returned as an error string and the rows simply stay
  * 'pending', retrying on the next poll run — same contract as notifyPending.
  * With filtering off (mode 'off' or an empty profile) rows pass straight
@@ -187,30 +171,11 @@ async function screenPending(
   if (!rows || rows.length === 0) return null;
 
   const layerActive = companyLayerActive(cfg);
-  const blocked = parseBlockedCompanies(cfg.blockedCompanies);
-  // Only worth a query when a nameless row could still be researched or blocked.
-  const fallback = (layerActive || blocked.size > 0) && rows.some((r) => !r.company)
+  // Only worth a query when a nameless row could still be researched.
+  const fallback = layerActive && rows.some((r) => !r.company)
     ? await pageCompanyFallback(db, page)
     : null;
-
-  const openRows: typeof rows = [];
-  for (const row of rows) {
-    const name = row.company ?? fallback;
-    if (name && isCompanyBlocked(name, blocked)) {
-      const { error: blockError } = await db.from("postings").update({
-        filter_status: "filtered",
-        filter_score: BLOCKED_COMPANY_VERDICT.score,
-        filter_verdict: BLOCKED_COMPANY_VERDICT,
-        pending_notify: false,
-        blocked_by_screening: true,
-      }).eq("id", row.id);
-      if (blockError) return `block company failed: ${blockError.message}`;
-      result.filteredOut++;
-    } else {
-      openRows.push(row);
-    }
-  }
-  if (openRows.length === 0) return null;
+  const openRows = rows;
 
   if (cfg.filterMode === "off" || !profileHasContent(cfg.filterProfile)) {
     for (const row of openRows) {

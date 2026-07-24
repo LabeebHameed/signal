@@ -49,10 +49,6 @@ function useFunnelCounts(): FunnelCounts {
     queryKey: ["postings", "workflow", "count", "companyPending"],
     queryFn: () => api.listPostings({ limit: 1, companyStatus: "pending" }),
   });
-  const blocked = useQuery({
-    queryKey: ["postings", "workflow", "count", "blocked"],
-    queryFn: () => api.listPostings({ limit: 1, status: "filtered", blocked: true }),
-  });
 
   return {
     total: total.data?.total ?? 0,
@@ -65,7 +61,6 @@ function useFunnelCounts(): FunnelCounts {
     notSent: notSent.data?.total ?? 0,
     companyWarned: companyWarned.data?.total ?? 0,
     companyPending: companyPending.data?.total ?? 0,
-    blocked: blocked.data?.total ?? 0,
   };
 }
 

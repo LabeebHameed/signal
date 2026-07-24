@@ -21,7 +21,6 @@ export function resolveConfig(settings: Settings): RuntimeConfig {
     filterProfile: settings.filter_profile ?? {},
     filterMode: (settings.filter_mode ?? "balanced") as FilterMode,
     companyFilterEnabled: settings.company_filter_enabled ?? false,
-    blockedCompanies: settings.blocked_companies ?? "",
     minScore: settings.min_score ?? 0,
   };
 }

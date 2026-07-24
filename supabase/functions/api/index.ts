@@ -27,13 +27,10 @@
 //                                 &notified=true|false&pending_notify=true|false
 //                                 &screened=true (matched+filtered, for a combined pass/fail view)
 //                                 &not_sent=true (filtered OR archived as a cross-source duplicate)
-//                                 &blocked=true (filtered specifically by the blocked-company
-//                                 check, as opposed to the AI judge — combine with status=filtered)
 //                                 → { items, total }
 //                                 (the extra filters are for the Workflow page's per-stage
 //                                 audit rosters — send at most one of status/screened/not_sent
-//                                 per request, they override rather than intersect; blocked is
-//                                 the one exception meant to combine with status=filtered)
+//                                 per request, they override rather than intersect)
 //   PATCH  /postings/:id          { user_status } record what the seeker did with a
 //                                 posting (interested/not_interested/applied/...) —
 //                                 feeds back into the judge's calibration context
@@ -290,17 +287,11 @@ Deno.serve(async (req: Request) => {
       const pendingNotify = params.get("pending_notify");
       const screened = params.get("screened") === "true";
       const notSent = params.get("not_sent") === "true";
-      // The Workflow page splits "screening" (the deterministic blocked-company
-      // check) from "AI judge" (the LLM score) into two nodes, even though both
-      // run inside the same poll-pages step — postings.blocked_by_screening is
-      // set at write time (see poll-pages screenPending) so this split is exact,
-      // not inferred from verdict contents.
-      const blocked = params.get("blocked") === "true";
       const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       let query = db
         .from("postings")
         .select(
-          "id, title, url, company, location, compensation, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_score, filter_verdict, blocked_by_screening, company_status, company_verdict, user_status, user_status_at, duplicate_of, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
+          "id, title, url, company, location, compensation, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_score, filter_verdict, company_status, company_verdict, user_status, user_status_at, duplicate_of, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
           { count: "exact" },
         );
       if (["pending", "matched", "filtered", "skipped"].includes(status)) {
@@ -319,7 +310,6 @@ Deno.serve(async (req: Request) => {
       // than intersecting with it (a request should only send one).
       if (screened) query = query.in("filter_status", ["matched", "filtered"]);
       if (notSent) query = query.or("filter_status.eq.filtered,duplicate_of.not.is.null");
-      if (blocked) query = query.eq("blocked_by_screening", true);
       const { data, error, count } = await query
         .order(sort, { ascending, nullsFirst: false })
         .order("id") // deterministic tiebreaker so pages don't overlap

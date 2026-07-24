@@ -18,14 +18,10 @@ import type { Settings, WatchedPage } from "../api";
 
 /** Which node is selected in the graph, and enough context to fetch that
  * node's roster. Shared between the graph (click targets) and the
- * inspector (which panel to render). Screening (the deterministic
- * blocked-company check) and the AI judge (the LLM score) are separate
- * stages — a posting rejected by one never reaches, and never appears
- * under, the other. */
+ * inspector (which panel to render). */
 export type InspectorState =
   | { kind: "overview" }
   | { kind: "source"; pageId: string; label: string }
-  | { kind: "screening" }
   | { kind: "judge" }
   | { kind: "company" }
   | { kind: "notified" }
@@ -44,8 +40,6 @@ export interface FunnelCounts {
   notSent: number;
   companyWarned: number;
   companyPending: number;
-  /** Filtered specifically by the blocked-company check (a subset of `filtered`). */
-  blocked: number;
 }
 
 type NodeColor = "blue" | "amber" | "teal" | "purple" | "gray";
@@ -66,12 +60,6 @@ const ICONS: Record<string, JSX.Element> = {
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L11.5 4.5" />
       <path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L12.5 19.5" />
-    </svg>
-  ),
-  shield: (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3 4 6v6c0 4.5 3.2 7.7 8 9 4.8-1.3 8-4.5 8-9V6l-8-3Z" />
-      <path d="m9 12 2 2 4-4" />
     </svg>
   ),
   judge: (
@@ -194,41 +182,24 @@ function buildGraph(
       width: NODE_WIDTH,
     });
     edges.push({
-      id: `e-${id}-screening`,
+      id: `e-${id}-judge`,
       source: id,
       sourceHandle: "down",
-      target: "screening",
+      target: "judge",
       type: "pipeline",
     });
   });
 
   nodes.push({
-    id: "screening",
-    type: "pipeline",
-    position: { x: spineX, y: ROW_GAP },
-    data: {
-      title: "Screening",
-      subtitle: "Blocked-company check",
-      badge: "FILTER",
-      color: "amber",
-      stat: `${counts.blocked} blocked`,
-      icon: "shield",
-      selected: isSelected("screening"),
-    },
-    draggable: false,
-    width: NODE_WIDTH,
-  });
-
-  nodes.push({
     id: "judge",
     type: "pipeline",
-    position: { x: spineX, y: ROW_GAP * 2 },
+    position: { x: spineX, y: ROW_GAP },
     data: {
       title: "AI Judge",
       subtitle: "LLM relevance score",
       badge: "AGENT",
       color: "teal",
-      stat: `${counts.matched} passed · ${Math.max(0, counts.filtered - counts.blocked)} failed${counts.pending > 0 ? ` · ${counts.pending} pending` : ""}`,
+      stat: `${counts.matched} passed · ${counts.filtered} failed${counts.pending > 0 ? ` · ${counts.pending} pending` : ""}`,
       icon: "judge",
       selected: isSelected("judge"),
     },
@@ -239,7 +210,7 @@ function buildGraph(
   nodes.push({
     id: "company",
     type: "pipeline",
-    position: { x: spineX, y: ROW_GAP * 3 },
+    position: { x: spineX, y: ROW_GAP * 2 },
     data: {
       title: "Company Qualify",
       subtitle: "Research & caution",
@@ -257,7 +228,7 @@ function buildGraph(
   nodes.push({
     id: "notified",
     type: "pipeline",
-    position: { x: spineX, y: ROW_GAP * 4 },
+    position: { x: spineX, y: ROW_GAP * 3 },
     data: {
       title: "Notify",
       subtitle: "Telegram delivery",
@@ -274,7 +245,7 @@ function buildGraph(
   nodes.push({
     id: "filtered",
     type: "pipeline",
-    position: { x: spineX + NODE_WIDTH + SIDE_GAP, y: ROW_GAP * 2.5 },
+    position: { x: spineX + NODE_WIDTH + SIDE_GAP, y: ROW_GAP * 1.5 },
     data: {
       title: "Filtered & Archived",
       subtitle: "Rejected or duplicate",
@@ -289,8 +260,6 @@ function buildGraph(
   });
 
   edges.push(
-    { id: "e-screening-judge", source: "screening", sourceHandle: "down", target: "judge", type: "pipeline", data: { label: "clear", tone: "ok" } },
-    { id: "e-screening-filtered", source: "screening", sourceHandle: "right", target: "filtered", type: "pipeline", data: { label: "blocked", tone: "skip" } },
     { id: "e-judge-company", source: "judge", sourceHandle: "down", target: "company", type: "pipeline", data: { label: "pass", tone: "ok" } },
     { id: "e-judge-filtered", source: "judge", sourceHandle: "right", target: "filtered", type: "pipeline", data: { label: "fail", tone: "skip" } },
     { id: "e-company-notified", source: "company", sourceHandle: "down", target: "notified", type: "pipeline" },
@@ -357,8 +326,6 @@ export function WorkflowGraph({
             return;
           }
           switch (node.id) {
-            case "screening":
-              return onSelect({ kind: "screening" });
             case "judge":
               return onSelect({ kind: "judge" });
             case "company":

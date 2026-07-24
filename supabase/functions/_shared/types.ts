@@ -195,7 +195,6 @@ export interface RuntimeConfig {
   filterProfile: FilterProfile;
   filterMode: FilterMode;
   companyFilterEnabled: boolean;
-  blockedCompanies: string;
   minScore: number;
 }
 

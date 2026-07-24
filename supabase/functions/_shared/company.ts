@@ -51,22 +51,6 @@ export function companyLayerActive(cfg: RuntimeConfig): boolean {
   return cfg.companyFilterEnabled && cfg.tavilyApiKey.trim() !== "";
 }
 
-/** Parse the user's blocked-companies list (newline- or comma-separated free
- * text, mirroring the Sources bulk-add textarea convention) into a set of
- * normalized names for matching against extracted postings. */
-export function parseBlockedCompanies(raw: string): Set<string> {
-  const names = raw.split(/[\n,]/).map((s) => s.trim()).filter((s) => s !== "");
-  return new Set(names.map(normalizeCompanyName).filter((n) => n !== ""));
-}
-
-/** Whether a company name matches an entry on the seeker's block list —
- * an absolute negative signal, checked before a posting ever reaches the
- * LLM judge. */
-export function isCompanyBlocked(companyName: string, blocked: Set<string>): boolean {
-  if (blocked.size === 0) return false;
-  return blocked.has(normalizeCompanyName(companyName));
-}
-
 export function dossierIsFresh(row: Pick<CompanyRow, "research_status" | "dossier" | "researched_at">): boolean {
   if (row.research_status !== "ok" || !row.dossier || !row.researched_at) return false;
   const age = Date.now() - new Date(row.researched_at).getTime();

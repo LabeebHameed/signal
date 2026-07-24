@@ -105,6 +105,9 @@ export interface Posting {
   filter_status: FilterStatus;
   filter_score: number | null;
   filter_verdict: PostingVerdict | null;
+  /** True when filter_status='filtered' came from the deterministic
+   * blocked-company check ("Screening") rather than the AI judge. */
+  blocked_by_screening: boolean;
   company_status: CompanyStatus;
   company_verdict: CompanyVerdict | null;
   user_status: UserStatus;

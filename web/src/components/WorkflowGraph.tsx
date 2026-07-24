@@ -337,7 +337,14 @@ export function WorkflowGraph({
         nodesConnectable={false}
         elementsSelectable={false}
         panOnDrag
-        zoomOnScroll
+        // A two-finger trackpad drag reports as wheel events — panOnScroll
+        // treats those as panning (matching the click-drag behavior above);
+        // zoomOnScroll off so the same gesture doesn't ALSO zoom. Pinch
+        // (ctrl+wheel on trackpads, real pinch on touch) still zooms via
+        // zoomOnPinch, matching standard canvas-app conventions.
+        panOnScroll
+        zoomOnScroll={false}
+        zoomOnPinch
         minZoom={0.2}
         maxZoom={1.5}
         fitView

@@ -85,11 +85,48 @@ function FunnelOverview({ counts }: { counts: FunnelCounts }) {
   );
 }
 
+/** Per-source counts, scoped to one watched page — separate from the
+ * page-wide FunnelCounts, which don't break down by source. */
+function useSourceCounts(pageId: string) {
+  const matched = useQuery({
+    queryKey: ["postings", "workflow", "source", pageId, "count", "matched"],
+    queryFn: () => api.listPostings({ pageId, limit: 1, status: "matched" }),
+  });
+  const filtered = useQuery({
+    queryKey: ["postings", "workflow", "source", pageId, "count", "filtered"],
+    queryFn: () => api.listPostings({ pageId, limit: 1, status: "filtered" }),
+  });
+  const pending = useQuery({
+    queryKey: ["postings", "workflow", "source", pageId, "count", "pending"],
+    queryFn: () => api.listPostings({ pageId, limit: 1, status: "pending" }),
+  });
+  return {
+    matched: matched.data?.total ?? 0,
+    filtered: filtered.data?.total ?? 0,
+    pending: pending.data?.total ?? 0,
+  };
+}
+
+type SourceTab = "all" | "matched" | "filtered" | "pending";
+
 function SourcePanel({ pageId, label, pages }: { pageId: string; label: string; pages: WatchedPage[] }) {
   const page = pages.find((p) => p.id === pageId);
+  const [tab, setTab] = useState<SourceTab>("all");
+  const counts = useSourceCounts(pageId);
+  // Every fetch here is scoped with pageId, both in the queryKey (so
+  // switching sources never shows another source's cached page) and in the
+  // request itself (page_id=<this source>) — this node's roster can only
+  // ever contain postings that came from this specific watched page.
   const { data, isLoading } = useQuery({
-    queryKey: ["postings", "workflow", "source", pageId],
-    queryFn: () => api.listPostings({ pageId, limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" }),
+    queryKey: ["postings", "workflow", "source", pageId, tab],
+    queryFn: () =>
+      api.listPostings({
+        pageId,
+        status: tab === "all" ? undefined : tab,
+        limit: ROSTER_LIMIT,
+        sort: "first_seen_at",
+        order: "desc",
+      }),
   });
   return (
     <>
@@ -107,6 +144,16 @@ function SourcePanel({ pageId, label, pages }: { pageId: string; label: string; 
           {page.last_checked_at ? ` · checked ${timeAgo(page.last_checked_at)}` : ""}
         </p>
       )}
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: "all", label: "All" },
+          { value: "matched", label: `Matched (${counts.matched})` },
+          { value: "filtered", label: `Filtered (${counts.filtered})` },
+          { value: "pending", label: `Pending (${counts.pending})` },
+        ]}
+      />
       <PostingRoster
         items={data?.items ?? []}
         total={data?.total ?? 0}
@@ -155,7 +202,7 @@ function JudgePanel({ counts }: { counts: FunnelCounts }) {
   });
   const items =
     tab === "failed"
-      ? (data?.items ?? []).filter((p) => p.filter_verdict?.dealbreaker !== "blocked company").slice(0, ROSTER_LIMIT)
+      ? (data?.items ?? []).filter((p) => !p.blocked_by_screening).slice(0, ROSTER_LIMIT)
       : data?.items ?? [];
   const total = tab === "failed" ? failedTotal : counts.matched;
 

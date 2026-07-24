@@ -202,6 +202,7 @@ async function screenPending(
         filter_score: BLOCKED_COMPANY_VERDICT.score,
         filter_verdict: BLOCKED_COMPANY_VERDICT,
         pending_notify: false,
+        blocked_by_screening: true,
       }).eq("id", row.id);
       if (blockError) return `block company failed: ${blockError.message}`;
       result.filteredOut++;

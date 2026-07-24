@@ -292,14 +292,15 @@ Deno.serve(async (req: Request) => {
       const notSent = params.get("not_sent") === "true";
       // The Workflow page splits "screening" (the deterministic blocked-company
       // check) from "AI judge" (the LLM score) into two nodes, even though both
-      // run inside the same poll-pages step — blocked postings are recognizable
-      // by their synthetic verdict (see BLOCKED_COMPANY_VERDICT in poll-pages).
+      // run inside the same poll-pages step — postings.blocked_by_screening is
+      // set at write time (see poll-pages screenPending) so this split is exact,
+      // not inferred from verdict contents.
       const blocked = params.get("blocked") === "true";
       const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       let query = db
         .from("postings")
         .select(
-          "id, title, url, company, location, compensation, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_score, filter_verdict, company_status, company_verdict, user_status, user_status_at, duplicate_of, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
+          "id, title, url, company, location, compensation, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_score, filter_verdict, blocked_by_screening, company_status, company_verdict, user_status, user_status_at, duplicate_of, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
           { count: "exact" },
         );
       if (["pending", "matched", "filtered", "skipped"].includes(status)) {
@@ -318,7 +319,7 @@ Deno.serve(async (req: Request) => {
       // than intersecting with it (a request should only send one).
       if (screened) query = query.in("filter_status", ["matched", "filtered"]);
       if (notSent) query = query.or("filter_status.eq.filtered,duplicate_of.not.is.null");
-      if (blocked) query = query.eq("filter_verdict->>dealbreaker", "blocked company");
+      if (blocked) query = query.eq("blocked_by_screening", true);
       const { data, error, count } = await query
         .order(sort, { ascending, nullsFirst: false })
         .order("id") // deterministic tiebreaker so pages don't overlap

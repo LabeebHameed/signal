@@ -26,11 +26,13 @@
 //                                 &page_id=<uuid>&company_status=none|pending|ok|warned
 //                                 &notified=true|false&pending_notify=true|false
 //                                 &screened=true (matched+filtered, for a combined pass/fail view)
-//                                 &not_sent=true (filtered OR archived as a cross-source duplicate)
+//                                 &duplicate=true (recognized as a repost of an already-notified
+//                                 job from another source — suppressed rather than sent again)
 //                                 → { items, total }
 //                                 (the extra filters are for the Workflow page's per-stage
-//                                 audit rosters — send at most one of status/screened/not_sent
-//                                 per request, they override rather than intersect)
+//                                 audit rosters — send at most one of status/screened per
+//                                 request, they override rather than intersect; duplicate
+//                                 combines with status:"matched")
 //   PATCH  /postings/:id          { user_status } record what the seeker did with a
 //                                 posting (interested/not_interested/applied/...) —
 //                                 feeds back into the judge's calibration context
@@ -286,7 +288,7 @@ Deno.serve(async (req: Request) => {
       const notified = params.get("notified");
       const pendingNotify = params.get("pending_notify");
       const screened = params.get("screened") === "true";
-      const notSent = params.get("not_sent") === "true";
+      const duplicate = params.get("duplicate") === "true";
       const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       let query = db
         .from("postings")
@@ -305,11 +307,14 @@ Deno.serve(async (req: Request) => {
       else if (notified === "false") query = query.is("notified_at", null);
       if (pendingNotify === "true") query = query.eq("pending_notify", true);
       else if (pendingNotify === "false") query = query.eq("pending_notify", false);
-      // screened/not_sent are combined views for the Workflow page's audit
-      // rosters — they override the plain filter_status match above rather
-      // than intersecting with it (a request should only send one).
+      // screened is a combined view for the Workflow page's audit rosters —
+      // it overrides the plain filter_status match above rather than
+      // intersecting with it (a request should only send one).
       if (screened) query = query.in("filter_status", ["matched", "filtered"]);
-      if (notSent) query = query.or("filter_status.eq.filtered,duplicate_of.not.is.null");
+      // duplicate combines with status (a duplicate is always filter_status
+      // = 'matched' by construction — only matched postings ever reach the
+      // notify step's dedupe check).
+      if (duplicate) query = query.not("duplicate_of", "is", null);
       const { data, error, count } = await query
         .order(sort, { ascending, nullsFirst: false })
         .order("id") // deterministic tiebreaker so pages don't overlap

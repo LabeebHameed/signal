@@ -239,21 +239,59 @@ function CompanyQualifyPanel({ counts, companyActive }: { counts: FunnelCounts; 
   );
 }
 
-function NotifiedPanel({ counts }: { counts: FunnelCounts }) {
+function DuplicatesPanel({ counts }: { counts: FunnelCounts }) {
   const { data, isLoading } = useQuery({
-    queryKey: ["postings", "workflow", "notified"],
-    queryFn: () => api.listPostings({ notified: true, limit: ROSTER_LIMIT, sort: "notified_at", order: "desc" }),
+    queryKey: ["postings", "workflow", "duplicates"],
+    queryFn: () => api.listPostings({ duplicate: true, limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" }),
+  });
+  return (
+    <>
+      <div className="card-header">
+        <h2>Duplicate Checker</h2>
+      </div>
+      <p className="hint">
+        Right before sending, a matched posting is checked against everything already notified from another source in
+        the last 14 days. A recognized repost is suppressed here — never sent twice.
+      </p>
+      <PostingRoster
+        items={data?.items ?? []}
+        total={counts.duplicates}
+        isLoading={isLoading}
+        emptyLabel="Nothing suppressed as a duplicate yet."
+      />
+    </>
+  );
+}
+
+function NotifiedPanel({ counts }: { counts: FunnelCounts }) {
+  const [tab, setTab] = useState<"sent" | "queued">("sent");
+  const { data, isLoading } = useQuery({
+    queryKey: ["postings", "workflow", "notified", tab],
+    queryFn: () =>
+      tab === "sent"
+        ? api.listPostings({ notified: true, limit: ROSTER_LIMIT, sort: "notified_at", order: "desc" })
+        : api.listPostings({ pendingNotify: true, limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" }),
   });
   return (
     <>
       <div className="card-header">
         <h2>Notify</h2>
       </div>
-      <p className="hint">
-        Every posting actually sent to Telegram
-        {counts.pendingNotify > 0 ? ` — ${counts.pendingNotify} more queued for the next run` : ""}.
-      </p>
-      <PostingRoster items={data?.items ?? []} total={data?.total ?? 0} isLoading={isLoading} emptyLabel="Nothing notified yet." />
+      <p className="hint">Sent = actually delivered to Telegram. Queued = matched, cleared, waiting on the next poll run to send.</p>
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: "sent", label: `Sent (${counts.notified})` },
+          { value: "queued", label: `Queued (${counts.pendingNotify})` },
+        ]}
+      />
+      <PostingRoster
+        items={data?.items ?? []}
+        total={tab === "sent" ? counts.notified : counts.pendingNotify}
+        isLoading={isLoading}
+        emptyLabel={tab === "sent" ? "Nothing notified yet." : "Nothing queued right now."}
+      />
     </>
   );
 }
@@ -261,21 +299,17 @@ function NotifiedPanel({ counts }: { counts: FunnelCounts }) {
 function FilteredPanel({ counts }: { counts: FunnelCounts }) {
   const { data, isLoading } = useQuery({
     queryKey: ["postings", "workflow", "filtered"],
-    queryFn: () => api.listPostings({ notSent: true, limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" }),
+    queryFn: () => api.listPostings({ status: "filtered", limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" }),
   });
-  const duplicateCount = Math.max(0, counts.notSent - counts.filtered);
   return (
     <>
       <div className="card-header">
         <h2>Filtered &amp; Archived</h2>
       </div>
-      <p className="hint">
-        Postings rejected by the AI judge
-        {duplicateCount > 0 ? `, plus ${duplicateCount} repost${duplicateCount === 1 ? "" : "s"} suppressed as a duplicate of an already-notified job` : ""}.
-      </p>
+      <p className="hint">Postings rejected by the AI judge.</p>
       <PostingRoster
         items={data?.items ?? []}
-        total={data?.total ?? 0}
+        total={counts.filtered}
         isLoading={isLoading}
         emptyLabel="Nothing filtered yet."
         viewAllHref="/postings?status=filtered"
@@ -309,6 +343,8 @@ export function WorkflowInspector({
           companyActive={Boolean(settings?.company_filter_enabled && settings?.has_tavily_api_key)}
         />
       );
+    case "duplicates":
+      return <DuplicatesPanel counts={counts} />;
     case "notified":
       return <NotifiedPanel counts={counts} />;
     case "filtered":

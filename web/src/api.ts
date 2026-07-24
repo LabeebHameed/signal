@@ -233,9 +233,9 @@ export const api = {
       pendingNotify?: boolean;
       /** Combined matched+filtered view — send instead of, not with, status. */
       screened?: boolean;
-      /** Filtered out OR archived as a cross-source duplicate — the
-       * "Filtered & Archived" node's real membership. */
-      notSent?: boolean;
+      /** Recognized as a repost of an already-notified job from another
+       * source — suppressed rather than sent again. Combines with status. */
+      duplicate?: boolean;
     } = {},
   ) => {
     const params = new URLSearchParams({
@@ -250,7 +250,7 @@ export const api = {
     if (opts.notified !== undefined) params.set("notified", String(opts.notified));
     if (opts.pendingNotify !== undefined) params.set("pending_notify", String(opts.pendingNotify));
     if (opts.screened) params.set("screened", "true");
-    if (opts.notSent) params.set("not_sent", "true");
+    if (opts.duplicate) params.set("duplicate", "true");
     return request<PostingsPage>(`/postings?${params}`);
   },
   updatePostingStatus: (id: string, userStatus: UserStatus) =>

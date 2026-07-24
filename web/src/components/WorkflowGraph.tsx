@@ -24,6 +24,7 @@ export type InspectorState =
   | { kind: "source"; pageId: string; label: string }
   | { kind: "judge" }
   | { kind: "company" }
+  | { kind: "duplicates" }
   | { kind: "notified" }
   | { kind: "filtered" };
 
@@ -37,7 +38,9 @@ export interface FunnelCounts {
   skipped: number;
   notified: number;
   pendingNotify: number;
-  notSent: number;
+  /** Matched postings recognized as a repost of an already-notified job
+   * from another source — suppressed rather than sent again. */
+  duplicates: number;
   companyWarned: number;
   companyPending: number;
 }
@@ -86,6 +89,12 @@ const ICONS: Record<string, JSX.Element> = {
       <rect x="3" y="4" width="18" height="4" rx="1" />
       <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8" />
       <path d="M10 13h4" />
+    </svg>
+  ),
+  copy: (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="9" width="11" height="11" rx="1.5" />
+      <path d="M5 15V5.5A1.5 1.5 0 0 1 6.5 4H15" />
     </svg>
   ),
 };
@@ -226,9 +235,26 @@ function buildGraph(
   });
 
   nodes.push({
-    id: "notified",
+    id: "duplicates",
     type: "pipeline",
     position: { x: spineX, y: ROW_GAP * 3 },
+    data: {
+      title: "Duplicate Checker",
+      subtitle: "Cross-source repost check",
+      badge: "FILTER",
+      color: "teal",
+      stat: `${counts.duplicates} suppressed`,
+      icon: "copy",
+      selected: isSelected("duplicates"),
+    },
+    draggable: false,
+    width: NODE_WIDTH,
+  });
+
+  nodes.push({
+    id: "notified",
+    type: "pipeline",
+    position: { x: spineX, y: ROW_GAP * 4 },
     data: {
       title: "Notify",
       subtitle: "Telegram delivery",
@@ -245,13 +271,13 @@ function buildGraph(
   nodes.push({
     id: "filtered",
     type: "pipeline",
-    position: { x: spineX + NODE_WIDTH + SIDE_GAP, y: ROW_GAP * 1.5 },
+    position: { x: spineX + NODE_WIDTH + SIDE_GAP, y: ROW_GAP * 2 },
     data: {
       title: "Filtered & Archived",
-      subtitle: "Rejected or duplicate",
+      subtitle: "Rejected by the AI judge",
       badge: "OUTPUT",
       color: "gray",
-      stat: `${counts.notSent} total`,
+      stat: `${counts.filtered} total`,
       icon: "archive",
       selected: isSelected("filtered"),
     },
@@ -262,7 +288,9 @@ function buildGraph(
   edges.push(
     { id: "e-judge-company", source: "judge", sourceHandle: "down", target: "company", type: "pipeline", data: { label: "pass", tone: "ok" } },
     { id: "e-judge-filtered", source: "judge", sourceHandle: "right", target: "filtered", type: "pipeline", data: { label: "fail", tone: "skip" } },
-    { id: "e-company-notified", source: "company", sourceHandle: "down", target: "notified", type: "pipeline" },
+    { id: "e-company-duplicates", source: "company", sourceHandle: "down", target: "duplicates", type: "pipeline" },
+    { id: "e-duplicates-notified", source: "duplicates", sourceHandle: "down", target: "notified", type: "pipeline", data: { label: "unique", tone: "ok" } },
+    { id: "e-duplicates-filtered", source: "duplicates", sourceHandle: "right", target: "filtered", type: "pipeline", data: { label: "duplicate", tone: "skip" } },
   );
 
   return { nodes, edges };
@@ -330,6 +358,8 @@ export function WorkflowGraph({
               return onSelect({ kind: "judge" });
             case "company":
               return onSelect({ kind: "company" });
+            case "duplicates":
+              return onSelect({ kind: "duplicates" });
             case "notified":
               return onSelect({ kind: "notified" });
             case "filtered":

@@ -37,9 +37,9 @@ function useFunnelCounts(): FunnelCounts {
     queryKey: ["postings", "workflow", "count", "pendingNotify"],
     queryFn: () => api.listPostings({ limit: 1, pendingNotify: true }),
   });
-  const notSent = useQuery({
-    queryKey: ["postings", "workflow", "count", "notSent"],
-    queryFn: () => api.listPostings({ limit: 1, notSent: true }),
+  const duplicates = useQuery({
+    queryKey: ["postings", "workflow", "count", "duplicates"],
+    queryFn: () => api.listPostings({ limit: 1, duplicate: true }),
   });
   const companyWarned = useQuery({
     queryKey: ["postings", "workflow", "count", "companyWarned"],
@@ -58,7 +58,7 @@ function useFunnelCounts(): FunnelCounts {
     skipped: skipped.data?.total ?? 0,
     notified: notified.data?.total ?? 0,
     pendingNotify: pendingNotify.data?.total ?? 0,
-    notSent: notSent.data?.total ?? 0,
+    duplicates: duplicates.data?.total ?? 0,
     companyWarned: companyWarned.data?.total ?? 0,
     companyPending: companyPending.data?.total ?? 0,
   };

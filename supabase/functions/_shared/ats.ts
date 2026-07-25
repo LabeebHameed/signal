@@ -50,7 +50,7 @@ async function fetchGreenhouse(pageUrl: string): Promise<AtsResult | null> {
       location: j.location?.name,
       posted_text: j.updated_at,
     }))
-    .filter((p): p is ExtractedPosting => p.title !== "");
+    .filter((p) => p.title !== "");
   if (postings.length === 0) return null; // wrong/unknown token — let generic fetch try
   return { strategy: "greenhouse", postings };
 }
@@ -69,7 +69,7 @@ async function fetchLever(pageUrl: string): Promise<AtsResult | null> {
   if (!Array.isArray(data)) return null;
   const postings: ExtractedPosting[] = data
     .map((j) => ({ title: (j.text ?? "").trim(), url: j.hostedUrl, location: j.categories?.location }))
-    .filter((p): p is ExtractedPosting => p.title !== "");
+    .filter((p) => p.title !== "");
   if (postings.length === 0) return null;
   return { strategy: "lever", postings };
 }
@@ -86,7 +86,7 @@ async function fetchAshby(pageUrl: string): Promise<AtsResult | null> {
   const jobs = Array.isArray(data.jobs) ? data.jobs : [];
   const postings: ExtractedPosting[] = jobs
     .map((j) => ({ title: (j.title ?? "").trim(), url: j.jobUrl, location: j.location }))
-    .filter((p): p is ExtractedPosting => p.title !== "");
+    .filter((p) => p.title !== "");
   if (postings.length === 0) return null;
   return { strategy: "ashby", postings };
 }
@@ -135,52 +135,107 @@ function parseFeedItems(xml: string): ExtractedPosting[] {
 }
 
 const ORIGIN_FEED_PATHS = ["/feed", "/feed.xml", "/rss", "/rss.xml", "/atom.xml", "/index.xml"];
+// Job boards very often publish a board-wide feed under /jobs even when the
+// category page the user actually watches is behind an anti-bot wall
+// (confirmed in the wild: himalayas.app walls /jobs/<category> with a
+// Cloudflare challenge but serves /jobs/rss cleanly).
+const ORIGIN_JOB_FEED_PATHS = ["/jobs/rss", "/jobs/feed", "/jobs.rss"];
 
-/** Try the page's own URL as a feed, conventional feed paths on the origin,
- * and the page's own path with a ".rss"/".xml" or "/feed" suffix (a common
- * per-category convention — e.g. weworkremotely.com/categories/x publishes
- * weworkremotely.com/categories/x.rss). Only trusted when the response
- * actually parses as RSS/Atom with at least one item — never guessed from
- * the URL shape alone. */
+const PROBE_TIMEOUT_MS = 8_000;
+// Discovery runs as a rescue after a page has already failed every fetch
+// strategy, so it must stay bounded: a walled site can leave many probes
+// hanging until timeout, and one page must never eat the whole invocation.
+const DISCOVERY_BUDGET_MS = 40_000;
+const MAX_FEED_PROBES = 16;
+
+/** Standards-based feed autodiscovery: `<link rel="alternate"
+ * type="application/rss+xml" href="...">` in the origin's homepage. This is
+ * how a site is *supposed* to advertise its feed, so it beats guessing —
+ * but plenty of sites (himalayas.app among them) publish a feed without
+ * advertising it, which is what the path guesses below are for. */
+async function discoverAdvertisedFeeds(origin: string, signal: AbortSignal): Promise<string[]> {
+  try {
+    const res = await fetch(origin, { headers: { "Accept": "text/html" }, signal });
+    if (!res.ok) return [];
+    const html = (await res.text()).slice(0, 200_000);
+    const out: string[] = [];
+    for (const tag of html.match(/<link\b[^>]*>/gi) ?? []) {
+      if (!/rel=["']?alternate/i.test(tag)) continue;
+      if (!/type=["']?application\/(rss|atom)\+xml/i.test(tag)) continue;
+      const href = tag.match(/href=["']([^"']+)["']/i)?.[1];
+      if (!href) continue;
+      try {
+        out.push(new URL(href, origin).toString());
+      } catch {
+        // malformed href — ignore
+      }
+    }
+    return out;
+  } catch {
+    return []; // origin unreachable or itself walled — fall through to guesses
+  }
+}
+
+/** Fetch one candidate URL and return its postings only if it really is a
+ * usable feed. Never guesses from URL shape: a soft-404 that returns the
+ * site's HTML shell (himalayas.app/rss does exactly this) is rejected here. */
+async function tryFeedCandidate(candidate: string, signal: AbortSignal): Promise<ExtractedPosting[] | null> {
+  const res = await fetch(candidate, {
+    headers: { "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml" },
+    signal,
+  });
+  if (!res.ok) return null;
+  const contentType = res.headers.get("content-type") ?? "";
+  const body = await res.text();
+  const looksLikeFeed = contentType.includes("xml") || /<rss\b|<feed\b/i.test(body.slice(0, 500));
+  if (!looksLikeFeed) return null;
+  const postings = parseFeedItems(body);
+  // Some feeds (seen in the wild: WeWorkRemotely's category RSS) carry a
+  // title but no <link> and cram company+role into one string — a worse
+  // source than the generic HTML+LLM path this would replace. Only trust
+  // a feed that actually gives most postings a direct URL; otherwise
+  // fall through and let the proven path handle this page.
+  const withUrl = postings.filter((p) => p.url);
+  if (postings.length === 0 || withUrl.length < postings.length * 0.8) return null;
+  return postings;
+}
+
+/** Look for a usable RSS/Atom feed for this page: the page's own URL, then
+ * whatever the origin advertises, then conventional feed paths (per-page
+ * suffixes, then origin-wide, then job-board conventions). Only a response
+ * that actually parses as a feed with linked items is accepted. */
 async function fetchRss(pageUrl: string): Promise<AtsResult | null> {
   const url = new URL(pageUrl);
   url.hash = "";
   url.search = "";
   const origin = url.origin;
   const pathNoSlash = url.toString().replace(/\/$/, "");
+
+  const deadline = Date.now() + DISCOVERY_BUDGET_MS;
+  const advertised = await discoverAdvertisedFeeds(origin, AbortSignal.timeout(PROBE_TIMEOUT_MS));
+
   const candidates = [
     pageUrl,
+    ...advertised,
     pathNoSlash + ".rss",
+    pathNoSlash + "/rss",
     pathNoSlash + "/feed",
     pathNoSlash + ".xml",
     ...ORIGIN_FEED_PATHS.map((p) => origin + p),
+    ...ORIGIN_JOB_FEED_PATHS.map((p) => origin + p),
   ];
+
+  const seen = new Set<string>();
+  let probes = 0;
   for (const candidate of candidates) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10_000);
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    if (++probes > MAX_FEED_PROBES || Date.now() > deadline) break;
     try {
-      const res = await fetch(candidate, {
-        headers: { "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml" },
-        signal: controller.signal,
-      });
-      if (!res.ok) continue;
-      const contentType = res.headers.get("content-type") ?? "";
-      const body = await res.text();
-      const looksLikeFeed = contentType.includes("xml") || /<rss\b|<feed\b/i.test(body.slice(0, 500));
-      if (!looksLikeFeed) continue;
-      const postings = parseFeedItems(body);
-      // Some feeds (seen in the wild: WeWorkRemotely's category RSS) carry a
-      // title but no <link> and cram company+role into one string — a worse
-      // source than the generic HTML+LLM path this would replace. Only trust
-      // a feed that actually gives most postings a direct URL; otherwise
-      // fall through and let the proven path handle this page.
-      const withUrl = postings.filter((p) => p.url);
-      if (postings.length === 0 || withUrl.length < postings.length * 0.8) continue;
-      return { strategy: "rss", postings };
+      const postings = await tryFeedCandidate(candidate, AbortSignal.timeout(PROBE_TIMEOUT_MS));
+      if (postings) return { strategy: "rss", postings };
     } catch {
-      continue; // this candidate path doesn't exist / isn't a feed — try the next
-    } finally {
-      clearTimeout(timer);
+      continue; // this candidate doesn't exist / isn't a feed — try the next
     }
   }
   return null;

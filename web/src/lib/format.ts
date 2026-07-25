@@ -11,3 +11,14 @@ export function timeAgo(iso: string | null): string {
 export function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
+
+/**
+ * Whether a source's last_error is the "this site refuses automated access"
+ * state rather than a genuine fault. It's a settled condition with nothing
+ * to retry, so the UI marks it distinctly instead of as a red error.
+ * Matches the message poll-pages writes (BLOCKED_SOURCE_MESSAGE) — keep the
+ * two in sync.
+ */
+export function isBlockedSourceError(lastError: string | null): boolean {
+  return lastError?.startsWith("Site blocks automated access") ?? false;
+}

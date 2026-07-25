@@ -78,6 +78,32 @@ const COMPANY_BATCH = 10;
 // Fresh company researches (search + LLM dossier) per page per run — the
 // expensive part. Cached dossiers are free and don't count.
 const COMPANY_RESEARCH_PER_RUN = 3;
+// After this many consecutive fetch failures a page is treated as durably
+// broken rather than briefly flaky, and drops to the slow retry cadence
+// below instead of being refetched on every single poll. A page behind a
+// browser challenge will never come back on its own, and hammering it just
+// burns the invocation budget that healthy pages need.
+const DURABLE_FAILURE_THRESHOLD = 5;
+const DURABLE_FAILURE_RECHECK_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * A fetch failure that means "this site refuses automated access", as
+ * opposed to a transient network/server blip. Anti-bot walls answer with an
+ * explicit challenge page (caught by fetcher's block-signature screen), a
+ * 403, or a flat "access denied" — none of which a retry ever fixes.
+ */
+function isBlockedError(message: string): boolean {
+  return /blocked by anti-bot check|access denied|HTTP 403/i.test(message);
+}
+
+/** What the user sees on a walled source, instead of a wall of raw fetch
+ * errors: what happened, that it isn't transient, and what to do about it.
+ * The leading phrase is also how the UI recognizes this state — keep the
+ * two in sync (see isBlockedSourceError in web/src/lib/format.ts). */
+const BLOCKED_SOURCE_MESSAGE =
+  "Site blocks automated access (anti-bot challenge) and publishes no usable job feed. " +
+  "This can't be fetched automatically, so it's now only retried every few hours — " +
+  "remove this source if you don't want it checked.";
 
 interface PageResult {
   url: string;
@@ -514,22 +540,39 @@ async function fetchPageForPolling(page: WatchedPage): Promise<PageContent> {
   // and always worth trying.
   const tryRss = !page.first_crawl_done || page.fetch_strategy === "rss";
   const structured = await fetchStructured(page.url, tryRss);
-  if (structured) {
+  if (structured) return fromStructured(structured);
+
+  try {
+    const fetched = await fetchPageContent(page.url, page.fetch_strategy as FetchStrategy | null);
     return {
-      postings: structured.postings,
-      content: null,
-      hashInput: JSON.stringify(structured.postings),
-      strategy: structured.strategy,
-      truncated: false,
+      postings: null,
+      content: fetched.content,
+      hashInput: fetched.content,
+      strategy: fetched.strategy,
+      truncated: fetched.truncated,
     };
+  } catch (fetchError) {
+    // Every fetch strategy failed — most often an anti-bot wall that no
+    // amount of retrying will get past. Before giving up, probe for a feed
+    // even if we skipped that above: a site that walls its HTML very often
+    // still publishes a perfectly good RSS feed, and a page that fetched
+    // fine for weeks can start getting walled at any time (which is exactly
+    // when the first-crawl-only RSS probe is no longer any help).
+    if (!tryRss) {
+      const rescued = await fetchStructured(page.url, true);
+      if (rescued) return fromStructured(rescued);
+    }
+    throw fetchError;
   }
-  const fetched = await fetchPageContent(page.url, page.fetch_strategy as FetchStrategy | null);
+}
+
+function fromStructured(structured: { strategy: string; postings: ExtractedPosting[] }): PageContent {
   return {
-    postings: null,
-    content: fetched.content,
-    hashInput: fetched.content,
-    strategy: fetched.strategy,
-    truncated: fetched.truncated,
+    postings: structured.postings,
+    content: null,
+    hashInput: JSON.stringify(structured.postings),
+    strategy: structured.strategy,
+    truncated: false,
   };
 }
 
@@ -668,17 +711,26 @@ async function loadPagesByIds(db: SupabaseClient, ids: string[]): Promise<Watche
 }
 
 /**
+ * A page that has failed to fetch many times in a row and was checked
+ * recently. Retrying it every poll is pure waste — the common cause is an
+ * anti-bot wall, which never clears on its own — and each dead page's
+ * timeouts eat time the healthy pages in the same batch need. Dropping to
+ * a few-hour cadence keeps it recovering automatically (if the site
+ * unblocks, or starts publishing a feed we can find) without the cost.
+ */
+function inFailureBackoff(page: WatchedPage): boolean {
+  if (page.failure_count < DURABLE_FAILURE_THRESHOLD || !page.last_checked_at) return false;
+  return Date.now() - new Date(page.last_checked_at).getTime() < DURABLE_FAILURE_RECHECK_MS;
+}
+
+/**
  * The initial call of a run (no explicit id list yet): every active,
  * currently-unclaimed page, stalest-checked first, so pages that have been
  * neglected longest — the ones most likely to have been skipped by a prior
  * truncated run — are always at the front of the queue. A page claimed by
  * another in-flight run is excluded unless that claim has gone stale
  * (crashed invocation), which claimBatch's atomic re-check also guards.
- *
- * A scheduled (cron) run only picks up pages that are actually due
- * (next_check_at null or in the past) — that's the adaptive-cadence payoff,
- * a healthy page settled on a 6h interval isn't refetched every 15 min. A
- * forced run (the UI's "Check now") ignores due-ness entirely.
+ * Durably-failing pages are held back to a slow cadence (inFailureBackoff).
  */
 async function loadWorklist(db: SupabaseClient): Promise<WatchedPage[]> {
   const staleThreshold = new Date(Date.now() - CLAIM_STALE_MS).toISOString();
@@ -690,7 +742,7 @@ async function loadWorklist(db: SupabaseClient): Promise<WatchedPage[]> {
     .order("last_checked_at", { ascending: true, nullsFirst: true })
     .order("created_at");
   if (error) throw new Error(`load pages failed: ${error.message}`);
-  return (data ?? []) as WatchedPage[];
+  return ((data ?? []) as WatchedPage[]).filter((p) => !inFailureBackoff(p));
 }
 
 /**
@@ -734,9 +786,14 @@ async function runPoll(
     } else {
       const message = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
       const newFailureCount = page.failure_count + 1;
+      // Once a wall has proven durable, stop showing the raw per-strategy
+      // fetch errors — they're noise the user can't act on. Say plainly what
+      // happened and what their options are instead. Below the threshold the
+      // real error still shows, since an early failure may well be transient.
+      const durablyBlocked = isBlockedError(message) && newFailureCount >= DURABLE_FAILURE_THRESHOLD;
       await db.from("watched_pages").update({
         last_checked_at: new Date().toISOString(),
-        last_error: message.slice(0, 500),
+        last_error: durablyBlocked ? BLOCKED_SOURCE_MESSAGE : message.slice(0, 500),
         failure_count: newFailureCount,
         poll_claimed_at: null,
       }).eq("id", page.id);

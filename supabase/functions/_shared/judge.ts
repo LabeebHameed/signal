@@ -207,6 +207,60 @@ export function asVerdict(item: unknown, count: number): { id: number; verdict: 
   };
 }
 
+function normalizeRoleText(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+
+/** A posting with no company, location, or compensation gives the judge
+ * almost nothing beyond the bare title to reason from. Confirmed against
+ * real production data: Himalayas' RSS-feed fallback (used when its listing
+ * page is walled) carries only title/url/date, and on that exact shape of
+ * input the model stopped applying the title-scope rule — hallucinating
+ * "fits" for postings like "AI Data Engineer" or "Salesforce Consultant"
+ * against a "Design Engineer" target, scoring them 60-90 with
+ * title_mismatch left null. The same feed's richer postings (company +
+ * location populated, from before it got walled) screened correctly. This
+ * doesn't replace the judge's semantic reasoning — it only kicks in for
+ * that specific thin-data shape, as a deterministic textual check against
+ * the profile's declared roles/equivalents. */
+export function isThinPosting(p: ScreenablePosting): boolean {
+  return !p.company && !p.location && !p.compensation;
+}
+
+/** Substring containment (either direction) after normalizing to
+ * lowercase/whitespace-collapsed words — cheap enough to be reliable, and
+ * seniority qualifiers ("Senior UI Engineer") fall out for free since the
+ * bare equivalent ("ui engineer") is still a substring. */
+export function titleWithinDeclaredScope(title: string, profile: FilterProfile): boolean {
+  const equivalents = [profile.roles ?? "", profile.role_synonyms ?? ""]
+    .flatMap((v) => v.split(","))
+    .map(normalizeRoleText)
+    .filter((s) => s !== "");
+  if (equivalents.length === 0) return true; // no declared scope — nothing to check
+  const t = normalizeRoleText(title);
+  if (t === "") return true;
+  return equivalents.some((eq) => t.includes(eq) || eq.includes(t));
+}
+
+/** Exported for testing. Runs after the model's own title_mismatch field is
+ * already applied (asVerdict) — this only fires when the model missed it. */
+export function applyThinPostingBackstop(
+  verdict: PostingVerdict,
+  posting: ScreenablePosting,
+  profile: FilterProfile,
+): PostingVerdict {
+  if (verdict.title_mismatch !== null) return verdict; // already caught upstream
+  if (!isThinPosting(posting)) return verdict;
+  if (titleWithinDeclaredScope(posting.title, profile)) return verdict;
+  return {
+    ...verdict,
+    verdict: "mismatch",
+    title_mismatch:
+      `No company, location, or description was available to judge from, and "${posting.title}" ` +
+      `doesn't textually match any declared target role/equivalent — held back rather than guessed.`,
+  };
+}
+
 /**
  * Judge a batch of postings against the profile in one LLM call.
  *
@@ -241,6 +295,9 @@ export async function judgePostings(
   for (const item of (parsed as { verdicts: unknown[] }).verdicts) {
     const entry = asVerdict(item, postings.length);
     if (entry && !out.has(entry.id)) out.set(entry.id, entry.verdict);
+  }
+  for (const [i, verdict] of out) {
+    out.set(i, applyThinPostingBackstop(verdict, postings[i], profile));
   }
   return out;
 }

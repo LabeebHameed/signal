@@ -12,16 +12,14 @@
 //   GET    /settings              read settings (secrets masked to has_* booleans)
 //   PUT    /settings              update settings; secret fields only change
 //                                 when sent as non-empty strings. filter_profile
-//                                 is sanitized to the known profile fields;
-//                                 filter_mode must be off|balanced|strict.
-//                                 blocked_companies is free text (one company per
-//                                 line or comma-separated); min_score is 0-100.
+//                                 is sanitized to the known profile fields (a PUT
+//                                 replaces the whole profile).
 //   POST   /profile/expand        { statement } → { profile }: expand the user's
-//                                 one-sentence "what I'm looking for" into a
-//                                 structured filter profile via the LLM. Preview
-//                                 only — nothing is saved (use PUT /settings).
+//                                 one-sentence "what I'm looking for" into
+//                                 roles/role_synonyms/title_keywords via the LLM.
+//                                 Preview only — nothing is saved (use PUT /settings).
 //   GET    /postings              postings with filter + sort + pagination:
-//                                 ?limit=50&offset=0&sort=first_seen_at|posted_at|title|company|filter_score|notified_at
+//                                 ?limit=50&offset=0&sort=first_seen_at|title|company|notified_at
 //                                 &order=asc|desc&status=pending|matched|filtered|skipped
 //                                 &page_id=<uuid>&company_status=none|pending|ok|warned
 //                                 &notified=true|false&pending_notify=true|false
@@ -35,9 +33,6 @@
 //                                 audit rosters — send at most one of status/screened per
 //                                 request, they override rather than intersect; duplicate
 //                                 combines with status:"matched")
-//   PATCH  /postings/:id          { user_status } record what the seeker did with a
-//                                 posting (interested/not_interested/applied/...) —
-//                                 feeds back into the judge's calibration context
 //   POST   /poll                  trigger a poll run in the background, returns
 //                                 { started: true } immediately — watch /pages
 //                                 and /postings for results as they land
@@ -49,7 +44,7 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import type { FilterProfile, Settings, UserStatus } from "../_shared/types.ts";
+import type { FilterProfile, Settings } from "../_shared/types.ts";
 import { FILTER_PROFILE_KEYS } from "../_shared/types.ts";
 import { resolveConfig } from "../_shared/config.ts";
 import { deriveLabel } from "../_shared/label.ts";
@@ -75,10 +70,7 @@ function maskSettings(s: Settings) {
   return {
     profile_input: s.profile_input ?? "",
     filter_profile: s.filter_profile ?? {},
-    filter_mode: s.filter_mode ?? "balanced",
     company_filter_enabled: s.company_filter_enabled ?? false,
-    blocked_companies: s.blocked_companies ?? "",
-    min_score: s.min_score ?? 0,
     telegram_chat_id: s.telegram_chat_id,
     llm_provider: s.llm_provider,
     llm_model: s.llm_model,
@@ -226,16 +218,12 @@ Deno.serve(async (req: Request) => {
           "llm_model",
           "llm_base_url",
           "profile_input",
-          "blocked_companies",
         ]
       ) {
         if (typeof body[field] === "string") patch[field] = body[field].trim();
       }
       if (typeof body.company_filter_enabled === "boolean") {
         patch.company_filter_enabled = body.company_filter_enabled;
-      }
-      if (typeof body.min_score === "number" && Number.isFinite(body.min_score)) {
-        patch.min_score = Math.min(100, Math.max(0, Math.round(body.min_score)));
       }
       // Job filter: the profile is rebuilt from the known fields only (a PUT
       // replaces the whole profile — empty/omitted fields clear).
@@ -246,9 +234,6 @@ Deno.serve(async (req: Request) => {
           if (typeof value === "string" && value.trim() !== "") profile[key] = value.trim();
         }
         patch.filter_profile = profile;
-      }
-      if (["off", "balanced", "strict"].includes(body.filter_mode)) {
-        patch.filter_mode = body.filter_mode;
       }
       // Secret fields: only overwrite when a non-empty value is sent
       // (the UI sends "" / omits them to mean "keep the current value").
@@ -281,7 +266,7 @@ Deno.serve(async (req: Request) => {
       const params = new URL(req.url).searchParams;
       const limit = Math.min(Number(params.get("limit")) || 50, 200);
       const offset = Math.max(Number(params.get("offset")) || 0, 0);
-      const sortable = ["first_seen_at", "posted_at", "title", "company", "filter_score", "notified_at"];
+      const sortable = ["first_seen_at", "title", "company", "notified_at"];
       const sort = sortable.includes(params.get("sort") ?? "") ? params.get("sort")! : "first_seen_at";
       const ascending = params.get("order") === "asc";
       const status = params.get("status") ?? "";
@@ -296,7 +281,7 @@ Deno.serve(async (req: Request) => {
       let query = db
         .from("postings")
         .select(
-          "id, title, url, company, location, compensation, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_score, filter_verdict, company_status, company_verdict, user_status, user_status_at, duplicate_of, keyword_filtered, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
+          "id, title, url, company, location, compensation, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_verdict, company_status, company_verdict, duplicate_of, keyword_filtered, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
           { count: "exact" },
         );
       if (["pending", "matched", "filtered", "skipped"].includes(status)) {
@@ -326,30 +311,6 @@ Deno.serve(async (req: Request) => {
         .range(offset, offset + limit - 1);
       if (error) throw error;
       return json({ items: data, total: count ?? 0 });
-    }
-
-    if (resource === "postings" && resourceId && req.method === "PATCH") {
-      const body = await req.json();
-      const validStatuses: UserStatus[] = [
-        "none",
-        "interested",
-        "not_interested",
-        "applied",
-        "interviewing",
-        "offer",
-        "rejected",
-      ];
-      if (!validStatuses.includes(body.user_status)) {
-        return json({ error: `user_status must be one of: ${validStatuses.join(", ")}` }, 400);
-      }
-      const { data, error } = await db
-        .from("postings")
-        .update({ user_status: body.user_status, user_status_at: new Date().toISOString() })
-        .eq("id", resourceId)
-        .select()
-        .single();
-      if (error) throw error;
-      return json(data);
     }
 
     if (resource === "profile" && resourceId === "expand" && req.method === "POST") {

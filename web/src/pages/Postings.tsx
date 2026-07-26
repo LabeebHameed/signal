@@ -64,7 +64,7 @@ export default function Postings() {
           <h1>Postings</h1>
           <p className="page-subtitle">
             {total} {status === "" ? "extracted" : STATUS_OPTIONS.find((o) => o.value === status)?.label.toLowerCase()}
-            {items.length < total ? ` · showing ${items.length}` : ""} · click a row to see the reasoning and act on it
+            {items.length < total ? ` · showing ${items.length}` : ""} · click a row for the judge's reasoning
           </p>
         </div>
         <div className="postings-filters">
@@ -90,16 +90,10 @@ export default function Postings() {
                 Company{arrow("company")}
               </th>
               <th>Location</th>
-              <th>Source</th>
-              <th className="sortable" onClick={() => sortBy("posted_at")}>
-                Posted{arrow("posted_at")}
-              </th>
               <th className="sortable" onClick={() => sortBy("first_seen_at")}>
                 Seen{arrow("first_seen_at")}
               </th>
-              <th className="sortable" onClick={() => sortBy("filter_score")}>
-                Match{arrow("filter_score")}
-              </th>
+              <th>Match</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -125,8 +119,6 @@ export default function Postings() {
                     {p.companies?.display_name || p.company || "—"} <CompanyBadge posting={p} />
                   </td>
                   <td>{p.location ?? "—"}</td>
-                  <td className="muted">{p.watched_pages?.label || p.watched_pages?.url || "—"}</td>
-                  <td className="muted">{p.posted_text || p.posted_at || "—"}</td>
                   <td className="muted">{timeAgo(p.first_seen_at)}</td>
                   <td>
                     <VerdictPill posting={p} />
@@ -137,7 +129,7 @@ export default function Postings() {
                 </tr>
                 {expanded === p.id && (
                   <tr className="verdict-row">
-                    <td colSpan={8}>
+                    <td colSpan={6}>
                       <PostingVerdictDetail posting={p} />
                     </td>
                   </tr>
@@ -146,7 +138,7 @@ export default function Postings() {
             ))}
             {items.length === 0 && !isLoading && (
               <tr>
-                <td colSpan={8} className="empty">
+                <td colSpan={6} className="empty">
                   {status === "" ? "Nothing extracted yet." : "No postings match these filters."}
                 </td>
               </tr>

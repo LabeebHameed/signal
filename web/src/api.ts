@@ -13,45 +13,48 @@ export interface WatchedPage {
   fetch_strategy: string | null;
 }
 
-/** The job profile the filter judges postings against — all optional free text. */
+/** The title-screening profile the judge weighs postings against — every
+ * field is optional free text. roles/role_synonyms/title_keywords are
+ * LLM-generated (see api.expandProfile); locations/compensation are always
+ * entered directly by the user. */
 export interface FilterProfile {
+  /** The target role, close to the seeker's own words. */
   roles?: string;
   /** Equivalent/adjacent titles the judge treats as the target role. */
   role_synonyms?: string;
-  /** Short discipline words (not full titles) — a hard pre-filter rejects
-   * any posting whose title contains none of these before the AI judge
-   * ever runs. */
+  /** Short discipline words (not full titles) — a deterministic pre-filter
+   * rejects any posting whose title contains none of these before the AI
+   * judge ever runs. */
   title_keywords?: string;
-  seniority?: string;
+  /** Location / remote preference. */
   locations?: string;
-  skills?: string;
-  company_prefs?: string;
+  /** Pay expectation. */
   compensation?: string;
-  must_haves?: string;
-  nice_to_haves?: string;
-  dealbreakers?: string;
-  context?: string;
 }
 
-export type FilterMode = "off" | "balanced" | "strict";
+/** Canonical profile field order, mirrors the backend's FILTER_PROFILE_KEYS. */
+export const FILTER_PROFILE_KEYS: ReadonlyArray<keyof FilterProfile> = [
+  "roles",
+  "role_synonyms",
+  "title_keywords",
+  "locations",
+  "compensation",
+];
 
-/** 'pending' = awaiting screening; 'skipped' = never screened (baseline or filter off). */
+export function profileHasContent(profile: FilterProfile): boolean {
+  return FILTER_PROFILE_KEYS.some((key) => (profile[key] ?? "").trim() !== "");
+}
+
+/** 'pending' = awaiting screening; 'skipped' = never screened (baseline or empty profile). */
 export type FilterStatus = "pending" | "matched" | "filtered" | "skipped";
-
-export interface VerdictDimension {
-  name: string;
-  fit: "strong" | "partial" | "mismatch" | "unknown";
-  note: string;
-}
 
 /** The judge's stored reasoning for one posting. */
 export interface PostingVerdict {
   verdict: "match" | "borderline" | "mismatch";
-  score: number;
   summary: string;
-  dealbreaker: string | null;
+  /** Set when the posting's title is a different/broader role than the
+   * target and its equivalents — forces a mismatch. */
   title_mismatch: string | null;
-  dimensions: VerdictDimension[];
 }
 
 export type CompanyLegitimacy = "verified" | "likely_real" | "uncertain" | "suspicious";
@@ -90,10 +93,6 @@ export interface PostingCompany {
   researched_at: string | null;
 }
 
-/** What the seeker did with a posting after seeing it — feeds back into the
- * judge's calibration context on every future screening call. */
-export type UserStatus = "none" | "interested" | "not_interested" | "applied" | "interviewing" | "offer" | "rejected";
-
 export interface Posting {
   id: string;
   title: string;
@@ -107,12 +106,9 @@ export interface Posting {
   notified_at: string | null;
   pending_notify: boolean;
   filter_status: FilterStatus;
-  filter_score: number | null;
   filter_verdict: PostingVerdict | null;
   company_status: CompanyStatus;
   company_verdict: CompanyVerdict | null;
-  user_status: UserStatus;
-  user_status_at: string | null;
   /** Set when this posting was recognized as a repost of one already notified
    * from another source — the id of that earlier posting. */
   duplicate_of: string | null;
@@ -123,13 +119,7 @@ export interface Posting {
   watched_pages: { label: string; url: string } | null;
 }
 
-export type PostingSort =
-  | "first_seen_at"
-  | "posted_at"
-  | "title"
-  | "company"
-  | "filter_score"
-  | "notified_at";
+export type PostingSort = "first_seen_at" | "title" | "company" | "notified_at";
 
 export interface PostingsPage {
   items: Posting[];
@@ -140,12 +130,7 @@ export interface Settings {
   /** The raw "what are you looking for" statement the profile was generated from. */
   profile_input: string;
   filter_profile: FilterProfile;
-  filter_mode: FilterMode;
   company_filter_enabled: boolean;
-  /** Newline/comma-separated company names filtered out before the LLM judge ever sees them. */
-  blocked_companies: string;
-  /** Minimum judge score (0-100) required to notify. */
-  min_score: number;
   telegram_chat_id: string;
   llm_provider: string;
   llm_model: string;
@@ -166,10 +151,7 @@ export interface BulkAddResult {
 export interface SettingsUpdate {
   profile_input?: string;
   filter_profile?: FilterProfile;
-  filter_mode?: FilterMode;
   company_filter_enabled?: boolean;
-  blocked_companies?: string;
-  min_score?: number;
   telegram_chat_id?: string;
   llm_provider?: string;
   llm_model?: string;
@@ -267,12 +249,10 @@ export const api = {
     if (opts.keywordFiltered !== undefined) params.set("keyword_filtered", String(opts.keywordFiltered));
     return request<PostingsPage>(`/postings?${params}`);
   },
-  updatePostingStatus: (id: string, userStatus: UserStatus) =>
-    request<Posting>(`/postings/${id}`, { method: "PATCH", body: JSON.stringify({ user_status: userStatus }) }),
   poll: () => request<{ pages: number; results: unknown[] }>("/poll", { method: "POST" }),
   testTelegram: () => request<{ ok: boolean }>("/telegram-test", { method: "POST" }),
   expandProfile: (statement: string) =>
-    request<{ profile: FilterProfile }>("/profile/expand", {
+    request<{ profile: Pick<FilterProfile, "roles" | "role_synonyms" | "title_keywords"> }>("/profile/expand", {
       method: "POST",
       body: JSON.stringify({ statement }),
     }),

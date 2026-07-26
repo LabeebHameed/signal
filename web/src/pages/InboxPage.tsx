@@ -1,47 +1,17 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api";
-import { CompanyPanel } from "../components/CompanyPanel";
-import { BlockCompanyButton, PostingActions } from "../components/PostingActions";
+import { api, profileHasContent } from "../api";
+import { PostingVerdictDetail } from "../components/PostingVerdictDetail";
 import { StatusPill } from "../components/StatusPill";
 import { timeAgo } from "../lib/format";
 
 const PAGE_SIZE = 20;
 
-/** The judge's per-dimension breakdown, collapsed by default — the summary
- * line above already gives the headline; this is for when you want to know
- * exactly why. */
-function DimensionBreakdown({ dimensions }: { dimensions: Array<{ name: string; fit: string; note: string }> }) {
-  const [open, setOpen] = useState(false);
-  if (dimensions.length === 0) return null;
-  return (
-    <div className="dim-expander">
-      <button type="button" className="link-toggle" onClick={() => setOpen(!open)}>
-        <span className={`chevron${open ? " open" : ""}`}>▸</span> {open ? "Hide" : "Show"} reasoning
-      </button>
-      {open && (
-        <ul className="verdict-dims">
-          {dimensions.map((d, i) => (
-            <li key={`${d.name}-${i}`}>
-              <span className={`dim-fit dim-${d.fit}`}>
-                {d.name}: {d.fit}
-              </span>
-              {d.note && <span className="muted"> — {d.note}</span>}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 /**
  * The payoff surface: only the postings that came out of the filter, as
  * cards, each carrying the judge's reasoning and the researched company
- * background, plus the feedback actions (Interested / Not interested /
- * Applied / Block company) that calibrate future screening. Nothing here is
- * ever hidden by the company layer — a shady company is simply shown as that.
+ * background. Nothing here is ever hidden by the company layer — a shady
+ * company is simply shown as that.
  */
 export default function InboxPage() {
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: api.getSettings });
@@ -59,23 +29,21 @@ export default function InboxPage() {
 
   const items = data?.pages.flatMap((p) => p.items) ?? [];
   const total = data?.pages[0]?.total ?? 0;
-  const filteringOff = settings?.filter_mode === "off";
+  const noProfile = Boolean(settings) && !profileHasContent(settings!.filter_profile);
 
   return (
     <div className="page">
       <header className="page-header">
         <div>
           <h1>Inbox</h1>
-          <p className="page-subtitle">
-            {total} posting{total === 1 ? "" : "s"} that fit your profile, with the company behind each one.
-          </p>
+          <p className="page-subtitle">{total} posting{total === 1 ? "" : "s"} that fit your profile.</p>
         </div>
       </header>
 
-      {filteringOff && (
+      {noProfile && (
         <p className="hint banner">
-          Filtering is off, so nothing gets matched — every new posting is notified as-is. Turn it on and describe
-          what you're looking for on the <Link to="/profile">Profile page</Link>.
+          No profile yet, so every new posting is notified as-is. Describe what you're looking for on the{" "}
+          <Link to="/profile">Profile page</Link>.
         </p>
       )}
       {error && <p className="error">{error instanceof Error ? error.message : String(error)}</p>}
@@ -94,34 +62,17 @@ export default function InboxPage() {
                 )}
               </h3>
               {p.filter_verdict && (
-                <StatusPill
-                  tone={p.filter_verdict.verdict === "match" ? "ok" : "pending"}
-                  title={p.filter_verdict.summary}
-                >
-                  {p.filter_verdict.verdict === "match" ? "match" : "maybe"} · {p.filter_verdict.score}
+                <StatusPill tone={p.filter_verdict.verdict === "match" ? "ok" : "pending"}>
+                  {p.filter_verdict.verdict === "match" ? "match" : "maybe"}
                 </StatusPill>
               )}
             </header>
             <p className="match-meta muted">
-              {[
-                p.companies?.display_name || p.company,
-                p.location,
-                p.compensation,
-                p.posted_text || p.posted_at,
-              ]
+              {[p.companies?.display_name || p.company, p.location, p.compensation, p.posted_text || p.posted_at]
                 .filter(Boolean)
                 .join(" · ") || "—"}
             </p>
-            {p.filter_verdict?.summary && <p className="match-summary">{p.filter_verdict.summary}</p>}
-            {p.filter_verdict && <DimensionBreakdown dimensions={p.filter_verdict.dimensions} />}
-            <CompanyPanel posting={p} />
-            {p.duplicate_of && (
-              <p className="hint">Also seen on another source — already notified from there, so this one stayed quiet.</p>
-            )}
-            <div className="match-actions">
-              <PostingActions posting={p} />
-              <BlockCompanyButton posting={p} />
-            </div>
+            <PostingVerdictDetail posting={p} />
             <footer className="match-foot muted">
               from {p.watched_pages?.label || p.watched_pages?.url || "—"} · seen {timeAgo(p.first_seen_at)}
               {p.notified_at ? " · sent to Telegram" : ""}
@@ -130,7 +81,7 @@ export default function InboxPage() {
         ))}
       </div>
 
-      {items.length === 0 && !isLoading && !filteringOff && (
+      {items.length === 0 && !isLoading && !noProfile && (
         <section className="card">
           <p className="empty">
             No matches yet. They appear here as soon as a new posting fits the profile you described on the{" "}

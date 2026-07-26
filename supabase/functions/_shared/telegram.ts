@@ -84,7 +84,6 @@ export function formatPostingMessage(posting: {
   company?: string | null;
   location?: string | null;
   compensation?: string | null;
-  filter_score?: number | null;
   filter_verdict?: Pick<PostingVerdict, "summary"> | null;
 }, pageLabel: string, companyInfo?: CompanyInfo | null): string {
   const lines: string[] = [];

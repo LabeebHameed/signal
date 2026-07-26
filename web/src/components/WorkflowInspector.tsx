@@ -192,7 +192,7 @@ function JudgePanel({ counts }: { counts: FunnelCounts }) {
       </div>
       <p className="hint">
         The LLM's verdict on every posting that passed the title keyword filter — the exact stored reason
-        (dealbreaker, off-target title, or per-dimension fit), never a fresh explanation.
+        (off-target title, or the judge's summary), never a fresh explanation.
       </p>
       <Tabs
         value={tab}

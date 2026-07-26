@@ -47,6 +47,7 @@ export default function SettingsPage() {
         llm_provider: settings.llm_provider,
         llm_model: settings.llm_model,
         llm_base_url: settings.llm_base_url,
+        company_filter_enabled: settings.company_filter_enabled,
         ...(secrets.llm_api_key.trim() ? { llm_api_key: secrets.llm_api_key.trim() } : {}),
         ...(secrets.telegram_bot_token.trim() ? { telegram_bot_token: secrets.telegram_bot_token.trim() } : {}),
         ...(secrets.tavily_api_key.trim() ? { tavily_api_key: secrets.tavily_api_key.trim() } : {}),
@@ -182,13 +183,22 @@ export default function SettingsPage() {
 
         <section className="card">
           <h2>
-            Tavily <span className="hint">(optional)</span>
+            Company research <span className="hint">(optional)</span>
           </h2>
+          <p className="hint">
+            Look up the company behind a matched posting — legitimacy, size, funding — before notifying. Never
+            blocks a match, only adds a caution when something looks off.
+          </p>
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={settings.company_filter_enabled}
+              onChange={(e) => setSettings({ ...settings, company_filter_enabled: e.target.checked })}
+            />
+            Research companies behind matched postings
+          </label>
           <label>
-            API key{" "}
-            <span className="hint">
-              powers the company background checks (see Profile) — free at tavily.com
-            </span>
+            Tavily API key <span className="hint">free at tavily.com</span>
             <input
               type="password"
               value={secrets.tavily_api_key}
@@ -196,6 +206,9 @@ export default function SettingsPage() {
               placeholder={secretPlaceholder(settings.has_tavily_api_key)}
             />
           </label>
+          {settings.company_filter_enabled && !settings.has_tavily_api_key && (
+            <p className="error">Needs a Tavily API key above to actually run.</p>
+          )}
         </section>
 
         <button type="submit" disabled={saving}>

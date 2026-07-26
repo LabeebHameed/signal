@@ -25,7 +25,7 @@ export function PostingStatusPill({ posting }: { posting: Posting }) {
   return <StatusPill tone="muted">matched</StatusPill>;
 }
 
-/** The judge's verdict on a posting: match/maybe/no fit with its score. */
+/** The judge's verdict on a posting: match/maybe/no fit. */
 export function VerdictPill({ posting }: { posting: Posting }) {
   const v = posting.filter_verdict;
   if (v) {
@@ -33,7 +33,7 @@ export function VerdictPill({ posting }: { posting: Posting }) {
     const label = v.verdict === "match" ? "match" : v.verdict === "borderline" ? "maybe" : "no fit";
     return (
       <StatusPill tone={tone} title={v.summary}>
-        {label} · {v.score}
+        {label}
       </StatusPill>
     );
   }

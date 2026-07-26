@@ -37,7 +37,6 @@ import { fetchPageContent, sha256 } from "../_shared/fetcher.ts";
 import { fetchStructured } from "../_shared/ats.ts";
 import { extractPostings } from "../_shared/llm.ts";
 import { contentKeyFor, dedupeKeyFor } from "../_shared/dedupe.ts";
-import type { JudgeCalibration } from "../_shared/judge.ts";
 import { judgePostings, keywordFilterVerdict, profileHasContent, titleMatchesKeywords } from "../_shared/judge.ts";
 import {
   companyLayerActive,
@@ -146,27 +145,6 @@ function routeToNotify(companyName: string | null, layerActive: boolean): {
   return { pending_notify: true };
 }
 
-// Postings marked with one of these carry a real signal about match quality
-// (the seeker engaged, or explicitly said no); "rejected" is excluded — an
-// employer's decision isn't a comment on whether the match itself was good.
-const POSITIVE_FEEDBACK_STATUSES = ["interested", "applied", "interviewing", "offer"];
-const CALIBRATION_LIMIT = 8;
-
-/** Load a handful of the seeker's most recent interested / not-interested
- * postings to calibrate the judge's borderline calls (see judge.ts). Cheap
- * and best-effort: a failure here just means no calibration this run. */
-async function loadCalibration(db: SupabaseClient): Promise<JudgeCalibration> {
-  const fmt = (rows: Array<{ title: string; company: string | null }> | null) =>
-    (rows ?? []).map((r) => (r.company ? `${r.title} at ${r.company}` : r.title));
-  const [positive, negative] = await Promise.all([
-    db.from("postings").select("title, company").in("user_status", POSITIVE_FEEDBACK_STATUSES)
-      .order("user_status_at", { ascending: false }).limit(CALIBRATION_LIMIT),
-    db.from("postings").select("title, company").eq("user_status", "not_interested")
-      .order("user_status_at", { ascending: false }).limit(CALIBRATION_LIMIT),
-  ]);
-  return { interested: fmt(positive.data), notInterested: fmt(negative.data) };
-}
-
 /**
  * Screen this page's unjudged (filter_status='pending') postings against the
  * user's job profile and decide which ones deserve a notification. Matches
@@ -176,9 +154,9 @@ async function loadCalibration(db: SupabaseClient): Promise<JudgeCalibration> {
  *
  * A judge failure is returned as an error string and the rows simply stay
  * 'pending', retrying on the next poll run — same contract as notifyPending.
- * With filtering off (mode 'off' or an empty profile) rows pass straight
- * through as 'skipped', which also flushes any backlog left from when
- * filtering was on — though still via the company queue when that's active.
+ * With an empty profile, rows pass straight through as 'skipped', which also
+ * flushes any backlog left from when the profile had content — though still
+ * via the company queue when that's active.
  */
 async function screenPending(
   db: SupabaseClient,
@@ -188,7 +166,7 @@ async function screenPending(
 ): Promise<string | null> {
   const { data: rows, error } = await db
     .from("postings")
-    .select("id, title, url, company, location, posted_at, posted_text, compensation, content_key")
+    .select("id, title, company, location, compensation, content_key")
     .eq("page_id", page.id)
     .eq("filter_status", "pending")
     .order("first_seen_at")
@@ -201,10 +179,9 @@ async function screenPending(
   const fallback = layerActive && rows.some((r) => !r.company)
     ? await pageCompanyFallback(db, page)
     : null;
-  const openRows = rows;
 
-  if (cfg.filterMode === "off" || !profileHasContent(cfg.filterProfile)) {
-    for (const row of openRows) {
+  if (!profileHasContent(cfg.filterProfile)) {
+    for (const row of rows) {
       const { error: skipError } = await db
         .from("postings")
         .update({ filter_status: "skipped", ...routeToNotify(row.company ?? fallback, layerActive) })
@@ -218,15 +195,14 @@ async function screenPending(
   // none of the profile's declared title_keywords is rejected outright, no
   // LLM call spent — a hard backstop for cases the judge itself has gotten
   // wrong even with full posting context in hand (see titleMatchesKeywords).
-  const forJudge: typeof openRows = [];
-  for (const row of openRows) {
+  const forJudge: typeof rows = [];
+  for (const row of rows) {
     if (titleMatchesKeywords(row.title, cfg.filterProfile)) {
       forJudge.push(row);
       continue;
     }
     const { error: keywordError } = await db.from("postings").update({
       filter_status: "filtered",
-      filter_score: 0,
       filter_verdict: keywordFilterVerdict(row.title, cfg.filterProfile),
       keyword_filtered: true,
       pending_notify: false,
@@ -237,10 +213,9 @@ async function screenPending(
   }
   if (forJudge.length === 0) return null;
 
-  const calibration = await loadCalibration(db);
   let verdicts;
   try {
-    verdicts = await judgePostings(forJudge, cfg.filterProfile, page.label || page.url, cfg, calibration);
+    verdicts = await judgePostings(forJudge, cfg.filterProfile, page.label || page.url, cfg);
   } catch (e) {
     return `screening failed: ${e instanceof Error ? e.message : String(e)}`;
   }
@@ -248,9 +223,7 @@ async function screenPending(
   for (let i = 0; i < forJudge.length; i++) {
     const verdict = verdicts.get(i);
     if (!verdict) continue; // no valid verdict returned — stays pending, retried next run
-    const notify = (verdict.verdict === "match" ||
-      (verdict.verdict === "borderline" && cfg.filterMode === "balanced")) &&
-      verdict.score >= cfg.minScore;
+    const notify = verdict.verdict === "match";
     // Cross-source dedup runs right here, before company research — a
     // recognized repost is suppressed immediately instead of spending a
     // Tavily search + LLM dossier call researching a company for a posting
@@ -263,7 +236,6 @@ async function screenPending(
     }
     const { error: updateError } = await db.from("postings").update({
       filter_status: notify ? "matched" : "filtered",
-      filter_score: verdict.score,
       filter_verdict: verdict,
       ...(duplicateOf
         ? { duplicate_of: duplicateOf, pending_notify: false }
@@ -442,7 +414,6 @@ async function companyPending(
   try {
     verdicts = await judgeCompanies(
       ready.map(({ company }) => ({ name: company.display_name, dossier: company.dossier })),
-      cfg.filterProfile,
       cfg,
     );
   } catch (e) {
@@ -482,7 +453,7 @@ async function notifyPending(
   const { data: pending, error } = await db
     .from("postings")
     .select(
-      "id, title, url, company, location, compensation, filter_score, filter_verdict, content_key, companies(display_name, dossier)",
+      "id, title, url, company, location, compensation, filter_verdict, content_key, companies(display_name, dossier)",
     )
     .eq("page_id", page.id)
     .eq("pending_notify", true)

@@ -8,35 +8,36 @@ browser headers, then a crawler UA, then a free keyless reader proxy) followed
 by LLM extraction, so there are no per-site parsers to maintain.
 
 **Qualification layer:** between extraction and notification sits an LLM
-judge. On the **Profile** page you describe what you're looking for in one
-sentence ("I'm good at design and I want to be a design engineer — remote,
-no agencies") and Signal expands it into a structured job profile — including
-the equivalent titles companies use for the same work ("UI/UX Designer" ≈
-"UX Engineer" ≈ "User Experience Designer"), so postings never have to match
-your wording. Anything you don't mention stays open; the generated profile is
-shown as an editable preview you can fine-tune. Every new posting is then
-judged against it the way a person would weigh it: role semantics rather than
-title keywords, inferred seniority, location compatibility, hard requirements
-versus soft preferences. Only postings that qualify reach Telegram; everything
-else is kept, visible, and silent — with the judge's full reasoning stored so
-no decision is a black box.
+judge that screens by **title alone** — there's no job description anywhere
+in this system. On the **Profile** page you describe what you're looking for
+in one sentence ("I'm good at design and I want to be a design engineer")
+and Signal generates the equivalent titles companies use for the same work
+("UI/UX Designer" ≈ "UX Engineer" ≈ "User Experience Designer") plus a
+handful of title keywords, so postings never have to match your wording.
+You set your location/remote preference and pay expectation directly.
+Changed your mind entirely (e.g. "Design Engineer" → "Designer")? Regenerating
+fully replaces the target-role fields — or hit **Clear profile** for a clean
+slate. Every new posting is then judged: does its title name the target role
+(or a seniority-qualified variant of it), does its location fit, does its pay
+(when shown) fit — a posting whose title names a different or broader role is
+never a match, even if it shares a generic word like "Engineer". Two
+deterministic layers backstop the LLM here, since it has repeatedly
+misjudged title scope even with full context: a **title-keyword gate**
+rejects an obviously off-topic title before the judge ever runs (no LLM call
+spent), and a **thin-posting backstop** catches sources that hand the judge
+almost nothing but a bare title. Only postings judged a **match** reach
+Telegram; everything else is kept, visible, and silent — with the judge's
+reasoning stored so no decision is a black box.
 
 **Company background layer (optional):** before a match is delivered, Signal
 can research the company behind it — one live web search (Tavily) synthesized
 by the LLM into a cached dossier: what the company does, size, stage, recent
 funding, and a legitimacy assessment with concrete flags (fake-looking
 companies on job boards are a real thing). This layer **never blocks a
-posting** — an unverifiable or preference-clashing company still notifies,
-and the **Inbox** page shows every qualifying posting as a card with the
-full company background and caution when there is one (the Telegram message
-itself stays short — see below).
-
-**Feedback loop:** mark a posting Interested / Not interested / Applied
-(Inbox or Postings) and future screening calls see your recent decisions as
-calibration examples — the judge leans on stated profile first, feedback only
-sharpens genuinely borderline calls. Block a company outright (Profile page,
-or the "Block company" action) and its postings are filtered before they ever
-reach the LLM.
+posting** — an unverifiable company still notifies, and the **Inbox** page
+shows every qualifying posting as a card with the full company background and
+caution when there is one (the Telegram message itself stays short — see
+below).
 
 **Fixed polling:** every active page is checked on a fixed 15-minute interval (on every cron tick). There is no adaptive backoff or decay — this ensures that new postings are discovered as quickly as possible.
 
@@ -55,20 +56,21 @@ pg_cron (every 15 min)
           3. LLM extracts postings as JSON (structured-source path skips this)
           4. diff by normalized dedupe key (tracking params stripped, so a rotating
              click-token doesn't look like a new posting every poll) against `postings`
-          5. blocked companies are filtered deterministically, no LLM call; otherwise the
-             LLM judge screens new rows against your job profile (one batched call per
-             page, with your recent feedback as calibration) → verdict + 0-100 score +
-             per-dimension reasoning per posting
+          5. deterministic title-keyword gate first (a title sharing none of the profile's
+             declared title keywords is rejected outright, no LLM call spent), then the
+             LLM judge screens the rest by title (plus location/compensation metadata)
+             against your job profile, one batched call per page → verdict + one-line
+             reason per posting; a thin-posting backstop catches sources that hand the
+             judge almost nothing but a bare title
                matched  → company layer (if enabled), then queued for Telegram
                filtered → kept in the UI with its verdict, never notified
           6. company layer (optional): research each match's company (Tavily search
              + LLM dossier, cached 30 days) → ok, or warn with a caution — never blocked
           7. cross-source dedup: a job already notified recently under a different watched
              page (same normalized title+company) is linked as a duplicate, not re-sent
-          8. matched rows → one short Telegram message each: title, judge score +
-             one-line reason, company (+ type when researched), location, pay, link —
-             the full judge reasoning and company dossier live on the Inbox page, not in
-             the message itself
+          8. matched rows → one short Telegram message each: title, one-line reason,
+             company (+ type when researched), location, pay, link — the full judge
+             reasoning and company dossier live on the Inbox page, not in the message itself
              (the first-ever crawl of a page is a silent baseline — no notification flood)
           9. persist state: update last content hash, check error, and failure count
 
@@ -149,9 +151,9 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 
 1. **Sources** — paste the exact URLs that list postings (not a page that links to them).
 2. **Profile** — describe what you're looking for in one sentence, hit
-   **Generate profile**, review, save. (Optionally enable company background
-   checks here too.)
-3. **Settings** — LLM provider/model/key, Telegram bot token + chat ID.
+   **Generate profile**, set your location and compensation preference, save.
+3. **Settings** — LLM provider/model/key, Telegram bot token + chat ID, and
+   (optionally) a Tavily key to enable company background checks.
 4. **Check now** — trigger a poll immediately instead of waiting for cron.
 
 ## Troubleshooting
@@ -173,42 +175,42 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 
 ## How filtering works
 
-- **One sentence in, full profile out.** The Profile page turns your
-  description into the structured profile the judge reads (roles, equivalent
-  titles, seniority, locations, skills, company preferences, compensation,
-  must-haves, nice-to-haves, dealbreakers, context). Dimensions you didn't
-  mention stay empty — empty means "no preference", never a guess. The
-  derived profile is fully editable.
-- **The profile is free text per dimension, not rules.** The judge reads it
-  like a briefed assistant: "Solutions Engineer" won't match a profile asking
-  for product engineering roles just because it contains "Engineer", and
-  "Member of Technical Staff" can match one even though no word overlaps.
-  Generated equivalent titles mean "User Experience Designer" matches a
-  profile that said "UI/UX designer".
-- **Missing information is neutral.** Many postings are just a title and a
-  location; the judge only counts a dimension against a posting when the
-  posting actively contradicts the profile, never because it's silent.
-- **Must-haves vs. dealbreakers vs. nice-to-haves.** A posting that clearly
-  violates a must-have can't be a match; a dealbreaker that clearly applies
-  filters the posting outright (and is named in the verdict); nice-to-haves
-  only ever boost.
-- **Three modes** (Profile page): *Off* forwards everything, *Balanced*
-  notifies for `match` and `borderline` verdicts, *Strict* for `match` only.
-  An empty profile behaves like Off.
-- **Min score threshold** (Profile page): layered on top of the mode — a
-  posting must also score at or above this to notify, even if the verdict
-  qualifies.
-- **Blocked companies** (Profile page, or "Block company" in the Inbox):
-  postings from a blocked company are filtered deterministically before ever
-  reaching the LLM judge — an absolute, cost-free override.
-- **Feedback loop.** Marking a posting Interested / Not interested / Applied
-  feeds your most recent decisions back into the judge prompt as calibration
-  examples on future screening calls. It only nudges genuinely borderline
-  calls — a single data point never overrides a clear read of the profile.
-- **Nothing is dropped.** Filtered postings stay in the Postings page with
-  their verdict, 0-100 score, per-dimension breakdown, and a plain-English
-  summary — click any screened row to see why it was (or wasn't) sent. The
-  same summary is quoted in the Telegram message for matches.
+- **The profile has exactly five fields**, all on the Profile page: target
+  role, equivalent titles, and title keywords (all generated from your
+  one-sentence statement, then editable), plus location/remote preference and
+  compensation (always entered directly — the statement never touches them).
+  An empty profile disables filtering — every new posting notifies.
+- **Switching categories entirely** (e.g. "Design Engineer" → "Designer")?
+  Editing the statement and hitting Generate fully *replaces* the target-role
+  fields, it never merges old and new text together. **Clear profile** wipes
+  everything for a deliberate fresh start.
+- **Judged by title, not keyword matching.** The judge reads titles like a
+  briefed assistant: "Solutions Engineer" won't match a profile asking for
+  product engineering roles just because it contains "Engineer", and "Member
+  of Technical Staff" can match one even though no word overlaps. Equivalent
+  titles and title keywords all count as the target role.
+- **Title scope is a hard boundary.** When a target role is set, a posting
+  whose title names a different or broader discipline (e.g. "Full Stack
+  Engineer" against a target "Front-End Developer", or "Android Developer"
+  against "Design Engineer") is always a mismatch — sharing a generic word
+  like "Engineer" is never enough on its own. A seniority-qualified variant
+  of the target role ("Senior Front-End Engineer") is still in scope.
+- **Two deterministic backstops**, because the LLM has repeatedly gotten
+  title scope wrong even with full context in hand: a **title-keyword gate**
+  runs before the judge ever sees a posting — a title sharing none of the
+  profile's declared title keywords is rejected outright, no LLM call spent
+  (tracked separately in the Workflow page as its own pipeline step). A
+  **thin-posting backstop** runs after the judge's own verdict, for postings
+  whose source hands over almost nothing (no company/location/compensation,
+  just a bare title) — a textual scope check against the target role forces
+  a mismatch the model missed.
+- **Location and compensation are metadata checks, not title checks.** The
+  judge reads the posting's own location/pay fields against your stated
+  preference — never the title. Missing information is neutral, never
+  disqualifying: a posting with no pay shown simply isn't checked against
+  your compensation preference.
+- **Only "match" notifies.** Borderline and mismatch verdicts are kept in the
+  Postings page, visible with the judge's one-line reasoning, but silent.
 - **Failures hold, they don't guess.** If the judge call fails, postings stay
   "screening" and are retried on the next run — they're never silently
   notified or silently discarded. Changing the profile affects future
@@ -216,9 +218,9 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 
 ## How the company layer works
 
-- **Opt-in, and needs a Tavily key** (Profile page toggle): research without
-  live search evidence would just be the LLM guessing, so without a key the
-  layer stays inactive and matches notify directly.
+- **Opt-in, and needs a Tavily key** (Settings page): research without live
+  search evidence would just be the LLM guessing, so without a key the layer
+  stays inactive and matches notify directly.
 - **Matched postings only.** Companies are researched after a posting passes
   the job judge — mismatches never spend a search. One dossier per company
   (names are normalized: "Acme", "ACME Inc." and "acme, inc" are one row),
@@ -228,19 +230,18 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   year, a legitimacy level (`verified` / `likely_real` / `uncertain` /
   `suspicious`), concrete flags, confidence, and the sources used. A company
   that only exists on job boards comes out `uncertain` — caution, not
-  accusation.
+  accusation. The judge here is a pure legitimacy check — it doesn't weigh
+  the seeker's job preferences at all.
 - **Annotate, never block.** Every matched posting is still delivered — the
-  Telegram message stays short (title, score + reason, company + type,
-  location, pay, link); a company that can't be verified or clashes with
-  your stated preferences (e.g. "no tiny 2–3 person firms") gets its caution
-  on the **Inbox** page instead, with a badge and the full dossier. Research
+  Telegram message stays short (title, reason, company + type, location,
+  pay, link); a company that can't be verified gets its caution on the
+  **Inbox** page instead, with a badge and the full dossier. Research
   failures retry on later runs (up to 3 attempts), then the posting is
   delivered with a "couldn't verify" caution rather than being stuck.
 - **Inbox page** — every posting that came out of the filter, as cards:
-  judge score and summary, company badge (✓ verified / ? unverified /
-  ⚠ suspicious), the dossier, source links, and action buttons (Interested /
-  Not interested / Applied). This is where the full reasoning lives —
-  Telegram is just the ping to go look.
+  the judge's summary, company badge (✓ verified / ? unverified /
+  ⚠ suspicious), the dossier, and source links. This is where the full
+  reasoning lives — Telegram is just the ping to go look.
 
 ## Behavior notes
 
@@ -270,21 +271,22 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 ```
 supabase/
   migrations/                       # schema: tables + RLS, pg_cron job, notify queue,
-                                    # filter layer, dedup, fetch strategy, feedback
+                                    # filter layer, dedup, fetch strategy, company layer
   functions/
-    poll-pages/index.ts             # the poller (fetch → extract → dedupe → screen →
-                                    # company → notify)
+    poll-pages/index.ts             # the poller (fetch → extract → dedupe → keyword gate →
+                                    # judge → company → notify)
     api/index.ts                    # CRUD for the UI
     _shared/                        # fetcher (+ proxy fallback), ats (Greenhouse/Lever/
                                     # Ashby/RSS), dedupe, LLM adapters, judge, profile
                                     # expansion, company research, telegram, types
-web/                                # React UI: Dashboard, Inbox, Sources,
+web/                                # React UI: Dashboard, Inbox, Workflow, Sources,
                                     # Postings, Profile, Settings (vercel.json included)
 ```
 
 ## Out of scope (future phases)
 
-- Re-screening existing postings when the profile changes
+- Re-screening existing postings when the profile changes (Clear profile +
+  regenerate replaces the profile fields, but historical verdicts stand)
 - Multi-user accounts and auth
 - Telegram `/start` webhook onboarding (auto-capture chat ID)
 - Notification digests, per-site tuning

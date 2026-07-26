@@ -1,6 +1,6 @@
 // Company background layer: research the employer behind a matched posting
 // (is it a real operating company? what does it do? size, stage, funding?)
-// and judge the findings against the seeker's company preferences.
+// and judge the findings for legitimacy.
 //
 // Research = one Tavily web search call for live evidence + one LLM call to
 // synthesize a structured dossier from that evidence only. Dossiers are
@@ -11,7 +11,7 @@
 // the notification and shown in the UI, phrased as "couldn't verify", never
 // "fake" as fact.
 
-import type { CompanyDossier, CompanyRow, CompanyVerdict, FilterProfile, RuntimeConfig } from "./types.ts";
+import type { CompanyDossier, CompanyRow, CompanyVerdict, RuntimeConfig } from "./types.ts";
 import { llmJson } from "./llm.ts";
 
 export const COMPANY_REFRESH_DAYS = 30;
@@ -262,24 +262,15 @@ const COMPANY_VERDICTS_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-const COMPANY_JUDGE_SYSTEM_PROMPT = `You review, for one job seeker, the companies behind job postings that already matched their job profile. You get the seeker's company-related preferences plus a researched dossier per company. Decide per company whether to clear it ("ok") or attach a caution ("warn") — nothing is ever hidden from the seeker; a warn is delivered with the notification and shown in the UI.
+const COMPANY_JUDGE_SYSTEM_PROMPT = `You review, for a job seeker, the companies behind job postings that already matched their job profile. You get a researched dossier per company. Decide per company whether to clear it ("ok") or attach a caution ("warn") — nothing is ever hidden from the seeker; a warn is delivered with the notification and shown in the UI.
 
-- "warn" when there is genuine cause for caution: the dossier's legitimacy is "suspicious" or "uncertain", its confidence is low, or the dossier clearly conflicts with a stated company preference (e.g. the seeker says "no tiny 2–3 person firms" and the dossier shows a 3-person company).
+- "warn" when there is genuine cause for caution: the dossier's legitimacy is "suspicious" or "uncertain", or its confidence is low.
 - "ok" otherwise.
-- Missing information is neutral: an unknown size does not conflict with a size preference. Warn about missing evidence only through the legitimacy/confidence rule above.
-- Only company-related preferences apply here — the job itself already passed screening. Ignore role, location, skill, or compensation items that appear in the preference text.
+- Missing information is neutral: warn about missing evidence only through the legitimacy/confidence rule above, never because an unrelated fact (size, funding, etc.) is unknown.
 - reason: exactly one plain sentence the seeker will read, naming the decisive fact ("Only footprint found is job-board profiles — couldn't verify the company independently."). Phrase caution as unverified/couldn't-confirm, never as an accusation of fraud.
 
 Respond with JSON only: {"verdicts": [{"id": 0, "decision": "ok", "reason": "..."}]}
 Return exactly one entry per company, using each company's [id].`;
-
-function renderCompanyPrefs(profile: FilterProfile): string {
-  const lines: string[] = [];
-  if (profile.company_prefs) lines.push(`Company preferences: ${profile.company_prefs}`);
-  if (profile.dealbreakers) lines.push(`Dealbreakers (only company-related ones apply): ${profile.dealbreakers}`);
-  if (profile.context) lines.push(`About the seeker: ${profile.context}`);
-  return lines.length > 0 ? lines.join("\n") : "(none stated — screen for legitimacy only)";
-}
 
 function renderDossier(dossier: CompanyDossier): string {
   const parts: string[] = [`legitimacy: ${dossier.legitimacy}`, `confidence: ${dossier.confidence}`];
@@ -294,15 +285,14 @@ function renderDossier(dossier: CompanyDossier): string {
 }
 
 /**
- * Judge a batch of researched companies against the seeker's preferences in
- * one LLM call. Companies whose research permanently failed (dossier null)
- * never reach the LLM — they get a deterministic "couldn't verify" warn.
- * Same contract as judgePostings: verdicts keyed by input index; an id the
- * model failed to return a valid verdict for is absent from the map.
+ * Judge a batch of researched companies for legitimacy in one LLM call.
+ * Companies whose research permanently failed (dossier null) never reach
+ * the LLM — they get a deterministic "couldn't verify" warn. Same contract
+ * as judgePostings: verdicts keyed by input index; an id the model failed
+ * to return a valid verdict for is absent from the map.
  */
 export async function judgeCompanies(
   items: Array<{ name: string; dossier: CompanyDossier | null }>,
-  profile: FilterProfile,
   runtime: RuntimeConfig,
 ): Promise<Map<number, CompanyVerdict>> {
   const out = new Map<number, CompanyVerdict>();
@@ -319,12 +309,9 @@ export async function judgeCompanies(
   }
   if (judgeable.length === 0) return out;
 
-  const user = [
-    `THE SEEKER'S COMPANY PREFERENCES:\n${renderCompanyPrefs(profile)}`,
-    `COMPANIES:\n\n${
-      judgeable.map((i) => `[${i}] ${items[i].name}\n${renderDossier(items[i].dossier!)}`).join("\n\n")
-    }`,
-  ].join("\n\n");
+  const user = `COMPANIES:\n\n${
+    judgeable.map((i) => `[${i}] ${items[i].name}\n${renderDossier(items[i].dossier!)}`).join("\n\n")
+  }`;
 
   const parsed = await llmJson(runtime, {
     system: COMPANY_JUDGE_SYSTEM_PROMPT,

@@ -12,11 +12,11 @@ export interface ExtractedPosting {
 }
 
 /**
- * What the user is looking for. Every field is optional free text — the
- * judge only weighs dimensions the profile actually says something about,
- * and an entirely empty profile disables filtering.
+ * What the user is looking for — a title-screening profile. Every field is
+ * optional free text; an entirely empty profile disables filtering.
  */
 export interface FilterProfile {
+  /** The target role, close to the seeker's own words. */
   roles?: string;
   /** Equivalent/adjacent job titles for the target roles — companies name the
    * same work differently ("UI/UX Designer" ≈ "UX Engineer" ≈ "User
@@ -30,58 +30,40 @@ export interface FilterProfile {
    * even with full context (e.g. scoring "Android Developer" as a match for
    * "Design Engineer"). Empty means the gate is off. */
   title_keywords?: string;
-  seniority?: string;
+  /** Location / remote preference. User-entered, never LLM-generated. */
   locations?: string;
-  skills?: string;
-  company_prefs?: string;
+  /** Pay expectation. User-entered, never LLM-generated. */
   compensation?: string;
-  must_haves?: string;
-  nice_to_haves?: string;
-  dealbreakers?: string;
-  context?: string;
 }
 
-/** Canonical profile field order — shared by the API sanitizer, the judge
- * prompt, and the settings UI so all three stay in sync. */
+/** Canonical profile field order — shared by the API sanitizer and the judge
+ * prompt so both stay in sync. */
 export const FILTER_PROFILE_KEYS: ReadonlyArray<keyof FilterProfile> = [
   "roles",
   "role_synonyms",
   "title_keywords",
-  "seniority",
   "locations",
-  "skills",
-  "company_prefs",
   "compensation",
-  "must_haves",
-  "nice_to_haves",
-  "dealbreakers",
-  "context",
 ];
 
-export type FilterMode = "off" | "balanced" | "strict";
+/** The subset of the profile the LLM expansion generates from the seeker's
+ * one-sentence statement — locations/compensation are always user-entered. */
+export const GENERATED_PROFILE_KEYS: ReadonlyArray<keyof FilterProfile> = [
+  "roles",
+  "role_synonyms",
+  "title_keywords",
+];
 
-export interface VerdictDimension {
-  /** role | seniority | location | skills | company | compensation | requirements | other */
-  name: string;
-  fit: "strong" | "partial" | "mismatch" | "unknown";
-  note: string;
-}
-
-/** The judge's full reasoning for one posting (postings.filter_verdict). */
+/** The judge's stored reasoning for one posting (postings.filter_verdict). */
 export interface PostingVerdict {
   verdict: "match" | "borderline" | "mismatch";
-  /** 0–100 overall fit given the visible evidence. */
-  score: number;
   /** 1–2 sentence human-readable rationale for the decision. */
   summary: string;
-  /** Which stated dealbreaker applied, if any — forces a mismatch. */
-  dealbreaker: string | null;
   /** Why the posting's title is a different/broader role than the target
    * and its equivalents, if it is — forces a mismatch. A shared generic
    * word (e.g. "Engineer") between the posting and target titles is never
    * enough on its own to avoid this. */
   title_mismatch: string | null;
-  dimensions: VerdictDimension[];
 }
 
 /**
@@ -174,14 +156,7 @@ export interface Settings {
   /** The raw "what are you looking for" statement the profile was generated from. */
   profile_input: string;
   filter_profile: FilterProfile;
-  filter_mode: FilterMode;
   company_filter_enabled: boolean;
-  /** Newline/comma-separated company names to filter out deterministically,
-   * before the postings from them ever reach the LLM judge. */
-  blocked_companies: string;
-  /** Minimum judge score (0-100) required to notify, layered on top of the
-   * off/balanced/strict verdict mode. */
-  min_score: number;
   telegram_chat_id: string;
   admin_token: string;
   llm_provider: string;
@@ -202,18 +177,5 @@ export interface RuntimeConfig {
   telegramChatId: string;
   tavilyApiKey: string;
   filterProfile: FilterProfile;
-  filterMode: FilterMode;
   companyFilterEnabled: boolean;
-  minScore: number;
 }
-
-/** What the seeker did with a posting after seeing it — feeds straight back
- * into the judge's calibration context on every future screening call. */
-export type UserStatus =
-  | "none"
-  | "interested"
-  | "not_interested"
-  | "applied"
-  | "interviewing"
-  | "offer"
-  | "rejected";

@@ -1,7 +1,7 @@
 // Runtime config resolution: an env var with the matching name always wins;
 // otherwise the value comes from the settings table (managed in the web UI).
 
-import type { FilterMode, RuntimeConfig, Settings } from "./types.ts";
+import type { RuntimeConfig, Settings } from "./types.ts";
 
 function env(name: string, fallback: string): string {
   const value = Deno.env.get(name);
@@ -19,8 +19,6 @@ export function resolveConfig(settings: Settings): RuntimeConfig {
     telegramChatId: settings.telegram_chat_id,
     tavilyApiKey: env("TAVILY_API_KEY", settings.tavily_api_key),
     filterProfile: settings.filter_profile ?? {},
-    filterMode: (settings.filter_mode ?? "balanced") as FilterMode,
     companyFilterEnabled: settings.company_filter_enabled ?? false,
-    minScore: settings.min_score ?? 0,
   };
 }

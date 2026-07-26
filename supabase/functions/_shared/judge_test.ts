@@ -9,23 +9,18 @@ import {
 } from "./judge.ts";
 import type { FilterProfile, PostingVerdict } from "./types.ts";
 
-Deno.test("asVerdict forces mismatch when title_mismatch is set, even with a high score", () => {
+Deno.test("asVerdict forces mismatch when title_mismatch is set, even when the model said match", () => {
   const result = asVerdict(
     {
       id: 0,
       verdict: "match",
-      score: 85,
       summary: "Great stack fit.",
-      dealbreaker: null,
       title_mismatch: "Full Stack Engineer is broader than the target Front-End Developer role",
-      dimensions: [],
     },
     1,
   );
   assertEquals(result?.verdict.verdict, "mismatch");
   assertEquals(result?.verdict.title_mismatch, "Full Stack Engineer is broader than the target Front-End Developer role");
-  // Score itself is left as the model reported it — only the verdict is forced.
-  assertEquals(result?.verdict.score, 85);
 });
 
 Deno.test("asVerdict leaves the model's verdict untouched when title_mismatch is null", () => {
@@ -33,11 +28,8 @@ Deno.test("asVerdict leaves the model's verdict untouched when title_mismatch is
     {
       id: 0,
       verdict: "borderline",
-      score: 60,
       summary: "Partial fit.",
-      dealbreaker: null,
       title_mismatch: null,
-      dimensions: [],
     },
     1,
   );
@@ -45,39 +37,18 @@ Deno.test("asVerdict leaves the model's verdict untouched when title_mismatch is
   assertEquals(result?.verdict.title_mismatch, null);
 });
 
-Deno.test("asVerdict treats 'none'/'n/a' title_mismatch strings as null (tolerant parsing, same as dealbreaker)", () => {
+Deno.test("asVerdict treats 'none'/'n/a' title_mismatch strings as null (tolerant parsing)", () => {
   const result = asVerdict(
     {
       id: 0,
       verdict: "match",
-      score: 90,
       summary: "Strong fit.",
-      dealbreaker: null,
       title_mismatch: "none",
-      dimensions: [],
     },
     1,
   );
   assertEquals(result?.verdict.verdict, "match");
   assertEquals(result?.verdict.title_mismatch, null);
-});
-
-Deno.test("asVerdict: dealbreaker still wins over title_mismatch precedence-wise (both force mismatch either way)", () => {
-  const result = asVerdict(
-    {
-      id: 0,
-      verdict: "match",
-      score: 95,
-      summary: "Looks great otherwise.",
-      dealbreaker: "requires relocation",
-      title_mismatch: "Backend Engineer is a different role than the target Front-End Developer role",
-      dimensions: [],
-    },
-    1,
-  );
-  assertEquals(result?.verdict.verdict, "mismatch");
-  assertEquals(result?.verdict.dealbreaker, "requires relocation");
-  assertEquals(result?.verdict.title_mismatch, "Backend Engineer is a different role than the target Front-End Developer role");
 });
 
 const PROFILE: FilterProfile = {
@@ -88,11 +59,8 @@ const PROFILE: FilterProfile = {
 function matchVerdict(): PostingVerdict {
   return {
     verdict: "match",
-    score: 80,
     summary: "Looks great.",
-    dealbreaker: null,
     title_mismatch: null,
-    dimensions: [],
   };
 }
 
@@ -173,7 +141,6 @@ Deno.test("titleMatchesKeywords: an empty title_keywords means the gate is off",
 Deno.test("keywordFilterVerdict: always a deterministic mismatch naming the missing keywords", () => {
   const verdict = keywordFilterVerdict("Android Developer", KEYWORD_PROFILE);
   assertEquals(verdict.verdict, "mismatch");
-  assertEquals(verdict.score, 0);
   assertEquals(verdict.title_mismatch?.includes("Android Developer"), true);
   assertEquals(verdict.title_mismatch?.includes("design, UI, UX, design systems"), true);
 });

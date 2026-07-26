@@ -1,9 +1,7 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, profileHasContent } from "../api";
-import { PostingVerdictDetail } from "../components/PostingVerdictDetail";
-import { StatusPill } from "../components/StatusPill";
-import { timeAgo } from "../lib/format";
+import { JobCard } from "../components/JobCard";
 
 const PAGE_SIZE = 20;
 
@@ -50,34 +48,7 @@ export default function InboxPage() {
 
       <div className="match-grid">
         {items.map((p) => (
-          <article key={p.id} className="card match-card">
-            <header className="match-head">
-              <h3>
-                {p.url ? (
-                  <a href={p.url} target="_blank" rel="noreferrer">
-                    {p.title}
-                  </a>
-                ) : (
-                  p.title
-                )}
-              </h3>
-              {p.filter_verdict && (
-                <StatusPill tone={p.filter_verdict.verdict === "match" ? "ok" : "pending"}>
-                  {p.filter_verdict.verdict === "match" ? "match" : "maybe"}
-                </StatusPill>
-              )}
-            </header>
-            <p className="match-meta muted">
-              {[p.companies?.display_name || p.company, p.location, p.compensation, p.posted_text || p.posted_at]
-                .filter(Boolean)
-                .join(" · ") || "—"}
-            </p>
-            <PostingVerdictDetail posting={p} />
-            <footer className="match-foot muted">
-              from {p.watched_pages?.label || p.watched_pages?.url || "—"} · seen {timeAgo(p.first_seen_at)}
-              {p.notified_at ? " · sent to Telegram" : ""}
-            </footer>
-          </article>
+          <JobCard key={p.id} posting={p} />
         ))}
       </div>
 

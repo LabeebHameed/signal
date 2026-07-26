@@ -123,7 +123,8 @@ async function fetchHimalayas(pageUrl: string): Promise<AtsResult | null> {
     jobs?: Array<{
       title?: string;
       companyName?: string;
-      companySlug?: string;
+      applicationLink?: string;
+      guid?: string;
       locationRestrictions?: string[];
       minSalary?: number | null;
       maxSalary?: number | null;
@@ -138,10 +139,12 @@ async function fetchHimalayas(pageUrl: string): Promise<AtsResult | null> {
     const title = (j.title ?? "").trim();
     if (!title) continue;
     const company = j.companyName ?? undefined;
-    const companySlug = j.companySlug ?? "";
-    const jobUrl = companySlug
-      ? `https://himalayas.app/companies/${companySlug}/jobs/${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-+$/, "")}`
-      : undefined;
+    // The API gives the real per-posting URL directly (applicationLink, with
+    // guid as an identical fallback) — titles collide often enough (two
+    // "Senior Graphic Designer" postings from the same company, disambiguated
+    // only by a numeric suffix Himalayas appends) that slugifying the title
+    // ourselves would silently point one of them at the other's posting.
+    const jobUrl = j.applicationLink ?? j.guid ?? undefined;
     const location = (j.locationRestrictions ?? []).length > 0
       ? j.locationRestrictions!.join(", ")
       : "Remote";

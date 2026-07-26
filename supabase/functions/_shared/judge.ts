@@ -32,6 +32,7 @@ export interface JudgeCalibration {
 const PROFILE_LABELS: Record<keyof FilterProfile, string> = {
   roles: "Target roles",
   role_synonyms: "Equivalent / adjacent titles (treat as the target role)",
+  title_keywords: "Core discipline keywords (the actual domain of work)",
   seniority: "Seniority",
   locations: "Locations / remote",
   skills: "Skills & stack",
@@ -104,7 +105,8 @@ const JUDGE_SYSTEM_PROMPT = `You screen job postings for one job seeker. For eac
 Weigh every dimension the profile speaks to:
 - role: is the actual work behind the title what they want? Read titles the way an industry insider would ("Member of Technical Staff" is usually a software engineer; "Solutions Engineer" is usually pre-sales, not product engineering). Synonymous or adjacent titles can still be strong fits. When the profile lists equivalent/adjacent titles, a posting whose title matches any of them in meaning — not exact wording — is the target role; never require the profile's literal phrasing.
 - seniority: infer the level from the title and any cues (junior/senior/staff/lead/intern, "5+ years") and compare with what they target.
-- title scope (separate from the role dimension above, and a hard boundary — see the "title_mismatch" field below): when the profile states a target role, a posting is IN scope only if its title is the target role itself, one of the profile's listed equivalent/adjacent titles (in meaning), or a seniority/level-qualified variant of either (e.g. Senior/Staff/Principal/Lead/Sr./Jr./II/III/Intern/Associate + the base title, or a team/product qualifier that doesn't change the discipline, like "Front-End Engineer, Growth"). A posting is OUT of scope when its title names a different or broader discipline than the target and its equivalents — a shared generic word like "Engineer" or "Developer" is never enough by itself to put it in scope. Worked example: target role "Front-End Developer" with equivalents like "UI Engineer"/"Design Engineer" — a posting titled "Full Stack Engineer" is OUT of scope (broader role) even though it contains "Engineer"; "Senior Front-End Engineer" or "UI Engineer II" ARE in scope (same role, just a seniority variant). The same logic applies to any other named-different-role trap: "Backend Engineer", "DevOps Engineer", "Mobile Engineer", "Data Engineer", "QA Engineer", "Solutions Engineer", "Engineering Manager" are all out of scope for a target IC engineering role unless explicitly listed as an equivalent. When a title is genuinely generic/bare (e.g. plain "Software Engineer" with no discipline named), you may use the job description only to decide whether the underlying work matches — but once a title already names a specific different or broader role, the description cannot pull it back in scope.
+- title scope (separate from the role dimension above, and a hard boundary — see the "title_mismatch" field below): when the profile states a target role, a posting is IN scope only if its title is the target role itself, one of the profile's listed equivalent/adjacent titles (in meaning), or a seniority/level-qualified variant of either (e.g. Senior/Staff/Principal/Lead/Sr./Jr./II/III/Intern/Associate + the base title, or a team/product qualifier that doesn't change the discipline, like "Front-End Engineer, Growth"). A posting is OUT of scope when its title names a different or broader discipline than the target and its equivalents — a shared generic word like "Engineer" or "Developer" is never enough by itself to put it in scope. Worked example: target role "Front-End Developer" with equivalents like "UI Engineer"/"Design Engineer" — a posting titled "Full Stack Engineer" is OUT of scope (broader role) even though it contains "Engineer"; "Senior Front-End Engineer" or "UI Engineer II" ARE in scope (same role, just a seniority variant). The same logic applies to any other named-different-role trap: "Backend Engineer", "DevOps Engineer", "Mobile Engineer", "Data Engineer", "QA Engineer", "Solutions Engineer", "Engineering Manager" are all out of scope for a target IC engineering role unless explicitly listed as an equivalent. When a title is genuinely generic/bare (e.g. plain "Software Engineer" with no discipline named), you may use the job description only to decide whether the underlying work matches — but once a title already names a specific different or broader role, the description cannot pull it back in scope. A posting like "Android Developer" is a different discipline than "Design Engineer" and is OUT of scope even though both contain "Engineer"/"Developer"-shaped titles — never treat two engineering-flavored titles as equivalent just because they're both engineering.
+- discipline check (only when "Core discipline keywords" are given below — read them as naming the actual domain of work, not just words to pattern-match): a posting can share a keyword with the target discipline by pure coincidence while doing fundamentally different work — e.g. an "Electrical Designer" or "DFT (Design-For-Test) Engineer" contains "design" but is not UI/UX or product design work; a "Data Engineer" contains "Engineer" but isn't the target engineering discipline. Before treating a title as in scope, check that the underlying work plausibly belongs to the stated domain, not merely that a keyword appears in the title. This is a stricter reading of the title-scope rule above, not a separate pass.
 - location: could they actually work this job given their location and remote constraints? "Remote" with a region restriction only counts if the restriction is compatible.
 - skills: does the stated stack or domain line up with theirs?
 - company: employer type, stage, and industry versus their stated preferences.
@@ -240,6 +242,44 @@ export function titleWithinDeclaredScope(title: string, profile: FilterProfile):
   const t = normalizeRoleText(title);
   if (t === "") return true;
   return equivalents.some((eq) => t.includes(eq) || eq.includes(t));
+}
+
+/** Deterministic title-keyword gate, run BEFORE the AI judge ever sees a
+ * posting (see poll-pages screenPending) — not a backstop on the judge's
+ * output like applyThinPostingBackstop below, but a hard pre-filter on the
+ * input. profile.title_keywords is a short list of discipline WORDS (not
+ * full titles, unlike role_synonyms/roles): a posting whose title contains
+ * none of them never reaches the LLM at all. This exists because the judge
+ * has gotten title scope wrong even with full posting context in hand (e.g.
+ * scoring "Android Developer" as a match for "Design Engineer") — a purely
+ * textual gate ahead of the model closes that gap regardless of the model's
+ * reliability. Empty title_keywords means the gate is off (unset profiles
+ * behave exactly as before this field existed). */
+export function titleMatchesKeywords(title: string, profile: FilterProfile): boolean {
+  const keywords = (profile.title_keywords ?? "")
+    .split(",")
+    .map(normalizeRoleText)
+    .filter((s) => s !== "");
+  if (keywords.length === 0) return true; // no keyword gate declared
+  const t = normalizeRoleText(title);
+  if (t === "") return true;
+  return keywords.some((k) => t.includes(k));
+}
+
+/** The deterministic verdict recorded for a posting the keyword gate
+ * rejected — the caller stores this directly, no LLM call spent. */
+export function keywordFilterVerdict(title: string, profile: FilterProfile): PostingVerdict {
+  const keywords = profile.title_keywords ?? "";
+  return {
+    verdict: "mismatch",
+    score: 0,
+    summary: `Held back before the AI judge: "${title}" doesn't contain any of the profile's declared title keywords (${keywords}).`,
+    dealbreaker: null,
+    title_mismatch:
+      `"${title}" doesn't contain any of the profile's declared title keywords (${keywords}) — rejected by the ` +
+      `keyword filter ahead of the AI judge.`,
+    dimensions: [],
+  };
 }
 
 /** Exported for testing. Runs after the model's own title_mismatch field is

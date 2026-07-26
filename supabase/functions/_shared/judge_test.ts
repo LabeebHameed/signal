@@ -1,5 +1,12 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { applyThinPostingBackstop, asVerdict, isThinPosting, titleWithinDeclaredScope } from "./judge.ts";
+import {
+  applyThinPostingBackstop,
+  asVerdict,
+  isThinPosting,
+  keywordFilterVerdict,
+  titleMatchesKeywords,
+  titleWithinDeclaredScope,
+} from "./judge.ts";
 import type { FilterProfile, PostingVerdict } from "./types.ts";
 
 Deno.test("asVerdict forces mismatch when title_mismatch is set, even with a high score", () => {
@@ -139,4 +146,34 @@ Deno.test("applyThinPostingBackstop: does not double-flag when the model already
   verdict.title_mismatch = "already caught upstream";
   const result = applyThinPostingBackstop(verdict, { title: "AI Data Engineer" }, PROFILE);
   assertEquals(result, verdict);
+});
+
+const KEYWORD_PROFILE: FilterProfile = {
+  roles: "Design engineer",
+  role_synonyms: "Design Engineer, UX Engineer, UI Engineer, Design Technologist",
+  title_keywords: "design, UI, UX, design systems",
+};
+
+Deno.test("titleMatchesKeywords: rejects a title with no keyword overlap at all (reproduces Android Developer)", () => {
+  assertEquals(titleMatchesKeywords("Android Developer", KEYWORD_PROFILE), false);
+  assertEquals(titleMatchesKeywords("Backend Engineer", KEYWORD_PROFILE), false);
+});
+
+Deno.test("titleMatchesKeywords: accepts a title containing a declared keyword, full-context or not", () => {
+  assertEquals(titleMatchesKeywords("Senior UX Designer", KEYWORD_PROFILE), true);
+  assertEquals(titleMatchesKeywords("Design Systems Lead", KEYWORD_PROFILE), true);
+  assertEquals(titleMatchesKeywords("UI Engineer II", KEYWORD_PROFILE), true);
+});
+
+Deno.test("titleMatchesKeywords: an empty title_keywords means the gate is off", () => {
+  assertEquals(titleMatchesKeywords("Android Developer", { roles: "Design engineer" }), true);
+  assertEquals(titleMatchesKeywords("Android Developer", {}), true);
+});
+
+Deno.test("keywordFilterVerdict: always a deterministic mismatch naming the missing keywords", () => {
+  const verdict = keywordFilterVerdict("Android Developer", KEYWORD_PROFILE);
+  assertEquals(verdict.verdict, "mismatch");
+  assertEquals(verdict.score, 0);
+  assertEquals(verdict.title_mismatch?.includes("Android Developer"), true);
+  assertEquals(verdict.title_mismatch?.includes("design, UI, UX, design systems"), true);
 });

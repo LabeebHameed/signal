@@ -18,6 +18,10 @@ export interface FilterProfile {
   roles?: string;
   /** Equivalent/adjacent titles the judge treats as the target role. */
   role_synonyms?: string;
+  /** Short discipline words (not full titles) — a hard pre-filter rejects
+   * any posting whose title contains none of these before the AI judge
+   * ever runs. */
+  title_keywords?: string;
   seniority?: string;
   locations?: string;
   skills?: string;
@@ -112,6 +116,9 @@ export interface Posting {
   /** Set when this posting was recognized as a repost of one already notified
    * from another source — the id of that earlier posting. */
   duplicate_of: string | null;
+  /** True when this posting was rejected by the deterministic title-keyword
+   * gate ahead of the AI judge, rather than by the judge itself. */
+  keyword_filtered: boolean;
   companies: PostingCompany | null;
   watched_pages: { label: string; url: string } | null;
 }
@@ -236,6 +243,12 @@ export const api = {
       /** Recognized as a repost of an already-notified job from another
        * source — suppressed rather than sent again. Combines with status. */
       duplicate?: boolean;
+      /** Rejected by the deterministic title-keyword gate ahead of the AI
+       * judge (true), or reached/passed the judge (false). Combines with
+       * status — e.g. status:"filtered" + keywordFiltered:false is "the AI
+       * judge's own rejections", excluding what the keyword gate already
+       * caught. */
+      keywordFiltered?: boolean;
     } = {},
   ) => {
     const params = new URLSearchParams({
@@ -251,6 +264,7 @@ export const api = {
     if (opts.pendingNotify !== undefined) params.set("pending_notify", String(opts.pendingNotify));
     if (opts.screened) params.set("screened", "true");
     if (opts.duplicate) params.set("duplicate", "true");
+    if (opts.keywordFiltered !== undefined) params.set("keyword_filtered", String(opts.keywordFiltered));
     return request<PostingsPage>(`/postings?${params}`);
   },
   updatePostingStatus: (id: string, userStatus: UserStatus) =>

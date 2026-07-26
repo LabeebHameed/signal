@@ -165,15 +165,25 @@ function SourcePanel({ pageId, label, pages }: { pageId: string; label: string; 
 
 function JudgePanel({ counts }: { counts: FunnelCounts }) {
   const [tab, setTab] = useState<"failed" | "passed">("failed");
+  const judgeFailed = counts.filtered - counts.keywordFiltered;
   const { data, isLoading } = useQuery({
     queryKey: ["postings", "workflow", "judge", tab],
     queryFn: () =>
       tab === "passed"
         ? api.listPostings({ status: "matched", limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" })
-        : api.listPostings({ status: "filtered", limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" }),
+        // keywordFiltered:false excludes postings the keyword gate already
+        // rejected before the judge ever ran on them — this roster is the
+        // judge's own calls only.
+        : api.listPostings({
+          status: "filtered",
+          keywordFiltered: false,
+          limit: ROSTER_LIMIT,
+          sort: "first_seen_at",
+          order: "desc",
+        }),
   });
   const items = data?.items ?? [];
-  const total = tab === "failed" ? counts.filtered : counts.matched;
+  const total = tab === "failed" ? judgeFailed : counts.matched;
 
   return (
     <>
@@ -181,14 +191,14 @@ function JudgePanel({ counts }: { counts: FunnelCounts }) {
         <h2>AI Judge</h2>
       </div>
       <p className="hint">
-        The LLM's verdict on every posting from every source — the exact stored reason (dealbreaker, off-target
-        title, or per-dimension fit), never a fresh explanation.
+        The LLM's verdict on every posting that passed the title keyword filter — the exact stored reason
+        (dealbreaker, off-target title, or per-dimension fit), never a fresh explanation.
       </p>
       <Tabs
         value={tab}
         onChange={setTab}
         options={[
-          { value: "failed", label: `Failed (${counts.filtered})` },
+          { value: "failed", label: `Failed (${judgeFailed})` },
           { value: "passed", label: `Passed (${counts.matched})` },
         ]}
       />
@@ -199,6 +209,46 @@ function JudgePanel({ counts }: { counts: FunnelCounts }) {
         emptyLabel="Nothing here yet."
         viewAllHref={tab === "passed" ? "/postings?status=matched" : "/postings?status=filtered"}
       />
+    </>
+  );
+}
+
+function KeywordFilterPanel({ counts, settings }: { counts: FunnelCounts; settings: Settings | undefined }) {
+  const keywords = settings?.filter_profile.title_keywords ?? "";
+  const active = keywords.trim() !== "";
+  const { data, isLoading } = useQuery({
+    queryKey: ["postings", "workflow", "keywordFilter"],
+    queryFn: () =>
+      api.listPostings({ keywordFiltered: true, limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" }),
+    enabled: active,
+  });
+  return (
+    <>
+      <div className="card-header">
+        <h2>Title Keyword Filter</h2>
+      </div>
+      {!active ? (
+        <p className="hint">
+          This gate is off — no title_keywords declared on the profile. Set it on the Profile page (generated
+          automatically alongside the rest of the profile, or add it by hand) to reject postings whose title shares
+          none of the discipline's core words before they ever reach the AI judge.
+        </p>
+      ) : (
+        <>
+          <p className="hint">
+            Runs before the AI judge, for every source: a posting whose title contains none of{" "}
+            <strong>{keywords}</strong> is rejected right here — deterministic, no LLM call spent. This is the hard
+            backstop for cases the judge itself has gotten wrong even with full context (e.g. scoring an unrelated
+            "Android Developer" posting as a match).
+          </p>
+          <PostingRoster
+            items={data?.items ?? []}
+            total={counts.keywordFiltered}
+            isLoading={isLoading}
+            emptyLabel="Nothing rejected by the keyword filter yet."
+          />
+        </>
+      )}
     </>
   );
 }
@@ -307,7 +357,7 @@ function FilteredPanel({ counts }: { counts: FunnelCounts }) {
       <div className="card-header">
         <h2>Filtered &amp; Archived</h2>
       </div>
-      <p className="hint">Postings rejected by the AI judge.</p>
+      <p className="hint">Postings rejected by the title keyword filter or the AI judge.</p>
       <PostingRoster
         items={data?.items ?? []}
         total={counts.filtered}
@@ -335,6 +385,8 @@ export function WorkflowInspector({
       return <FunnelOverview counts={counts} />;
     case "source":
       return <SourcePanel pageId={state.pageId} label={state.label} pages={pages} />;
+    case "keywordFilter":
+      return <KeywordFilterPanel counts={counts} settings={settings} />;
     case "judge":
       return <JudgePanel counts={counts} />;
     case "company":

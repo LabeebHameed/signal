@@ -38,7 +38,7 @@ import { fetchStructured } from "../_shared/ats.ts";
 import { extractPostings } from "../_shared/llm.ts";
 import { contentKeyFor, dedupeKeyFor } from "../_shared/dedupe.ts";
 import type { JudgeCalibration } from "../_shared/judge.ts";
-import { judgePostings, profileHasContent } from "../_shared/judge.ts";
+import { judgePostings, keywordFilterVerdict, profileHasContent, titleMatchesKeywords } from "../_shared/judge.ts";
 import {
   companyLayerActive,
   dossierIsFresh,
@@ -214,15 +214,38 @@ async function screenPending(
     return null;
   }
 
+  // Deterministic keyword gate, ahead of the LLM call: a title containing
+  // none of the profile's declared title_keywords is rejected outright, no
+  // LLM call spent — a hard backstop for cases the judge itself has gotten
+  // wrong even with full posting context in hand (see titleMatchesKeywords).
+  const forJudge: typeof openRows = [];
+  for (const row of openRows) {
+    if (titleMatchesKeywords(row.title, cfg.filterProfile)) {
+      forJudge.push(row);
+      continue;
+    }
+    const { error: keywordError } = await db.from("postings").update({
+      filter_status: "filtered",
+      filter_score: 0,
+      filter_verdict: keywordFilterVerdict(row.title, cfg.filterProfile),
+      keyword_filtered: true,
+      pending_notify: false,
+    }).eq("id", row.id);
+    if (keywordError) return `save keyword-filter verdict failed: ${keywordError.message}`;
+    result.screened++;
+    result.filteredOut++;
+  }
+  if (forJudge.length === 0) return null;
+
   const calibration = await loadCalibration(db);
   let verdicts;
   try {
-    verdicts = await judgePostings(openRows, cfg.filterProfile, page.label || page.url, cfg, calibration);
+    verdicts = await judgePostings(forJudge, cfg.filterProfile, page.label || page.url, cfg, calibration);
   } catch (e) {
     return `screening failed: ${e instanceof Error ? e.message : String(e)}`;
   }
 
-  for (let i = 0; i < openRows.length; i++) {
+  for (let i = 0; i < forJudge.length; i++) {
     const verdict = verdicts.get(i);
     if (!verdict) continue; // no valid verdict returned — stays pending, retried next run
     const notify = (verdict.verdict === "match" ||
@@ -233,8 +256,8 @@ async function screenPending(
     // Tavily search + LLM dossier call researching a company for a posting
     // that's never going to be sent anyway.
     let duplicateOf: string | null = null;
-    if (notify && openRows[i].content_key) {
-      const dup = await findDuplicateNotification(db, openRows[i].id, openRows[i].content_key!);
+    if (notify && forJudge[i].content_key) {
+      const dup = await findDuplicateNotification(db, forJudge[i].id, forJudge[i].content_key!);
       if (dup.error) return dup.error;
       duplicateOf = dup.duplicateOf;
     }
@@ -245,9 +268,9 @@ async function screenPending(
       ...(duplicateOf
         ? { duplicate_of: duplicateOf, pending_notify: false }
         : notify
-        ? routeToNotify(openRows[i].company ?? fallback, layerActive)
+        ? routeToNotify(forJudge[i].company ?? fallback, layerActive)
         : { pending_notify: false }),
-    }).eq("id", openRows[i].id);
+    }).eq("id", forJudge[i].id);
     if (updateError) return `save verdict failed: ${updateError.message}`;
     result.screened++;
     if (!notify) result.filteredOut++;

@@ -18,6 +18,12 @@ const PROFILE_FIELDS: Array<{
     hint: "other names companies use for the same work — the judge treats any of these as the target role",
     placeholder: "e.g. UX Engineer, Design Technologist, UI Engineer",
   },
+  {
+    key: "title_keywords",
+    label: "Title keywords (hard filter)",
+    hint: "short discipline words, not full titles — a posting whose title contains NONE of these is rejected before the AI judge ever sees it, no exceptions",
+    placeholder: "e.g. design, UI, UX, design systems",
+  },
   { key: "seniority", label: "Seniority", placeholder: "e.g. senior or staff — no internships" },
   { key: "locations", label: "Locations & remote", placeholder: "e.g. remote (must allow India)" },
   { key: "skills", label: "Skills & stack", placeholder: "e.g. React, TypeScript; design systems" },

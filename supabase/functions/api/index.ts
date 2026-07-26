@@ -28,6 +28,8 @@
 //                                 &screened=true (matched+filtered, for a combined pass/fail view)
 //                                 &duplicate=true (recognized as a repost of an already-notified
 //                                 job from another source — suppressed rather than sent again)
+//                                 &keyword_filtered=true|false (rejected by the deterministic
+//                                 title-keyword gate ahead of the AI judge, vs by the judge itself)
 //                                 → { items, total }
 //                                 (the extra filters are for the Workflow page's per-stage
 //                                 audit rosters — send at most one of status/screened per
@@ -289,11 +291,12 @@ Deno.serve(async (req: Request) => {
       const pendingNotify = params.get("pending_notify");
       const screened = params.get("screened") === "true";
       const duplicate = params.get("duplicate") === "true";
+      const keywordFiltered = params.get("keyword_filtered");
       const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       let query = db
         .from("postings")
         .select(
-          "id, title, url, company, location, compensation, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_score, filter_verdict, company_status, company_verdict, user_status, user_status_at, duplicate_of, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
+          "id, title, url, company, location, compensation, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_score, filter_verdict, company_status, company_verdict, user_status, user_status_at, duplicate_of, keyword_filtered, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
           { count: "exact" },
         );
       if (["pending", "matched", "filtered", "skipped"].includes(status)) {
@@ -315,6 +318,8 @@ Deno.serve(async (req: Request) => {
       // = 'matched' by construction — only matched postings ever reach the
       // notify step's dedupe check).
       if (duplicate) query = query.not("duplicate_of", "is", null);
+      if (keywordFiltered === "true") query = query.eq("keyword_filtered", true);
+      else if (keywordFiltered === "false") query = query.eq("keyword_filtered", false);
       const { data, error, count } = await query
         .order(sort, { ascending, nullsFirst: false })
         .order("id") // deterministic tiebreaker so pages don't overlap

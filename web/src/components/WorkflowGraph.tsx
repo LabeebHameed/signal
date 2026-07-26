@@ -22,6 +22,7 @@ import type { Settings, WatchedPage } from "../api";
 export type InspectorState =
   | { kind: "overview" }
   | { kind: "source"; pageId: string; label: string }
+  | { kind: "keywordFilter" }
   | { kind: "judge" }
   | { kind: "company" }
   | { kind: "duplicates" }
@@ -43,6 +44,10 @@ export interface FunnelCounts {
   duplicates: number;
   companyWarned: number;
   companyPending: number;
+  /** Rejected by the deterministic title-keyword gate before the AI judge
+   * ever ran — a subset of `filtered`, broken out so the judge node's own
+   * stat only reflects what the judge itself rejected. */
+  keywordFiltered: number;
 }
 
 type NodeColor = "blue" | "amber" | "teal" | "purple" | "gray";
@@ -95,6 +100,11 @@ const ICONS: Record<string, JSX.Element> = {
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="9" y="9" width="11" height="11" rx="1.5" />
       <path d="M5 15V5.5A1.5 1.5 0 0 1 6.5 4H15" />
+    </svg>
+  ),
+  filter: (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 4h16l-6.5 8.5v6L10.5 21v-8.5L4 4Z" />
     </svg>
   ),
 };
@@ -191,24 +201,43 @@ function buildGraph(
       width: NODE_WIDTH,
     });
     edges.push({
-      id: `e-${id}-judge`,
+      id: `e-${id}-keywordFilter`,
       source: id,
       sourceHandle: "down",
-      target: "judge",
+      target: "keywordFilter",
       type: "pipeline",
     });
+  });
+
+  const keywordGateActive = Boolean((settings?.filter_profile.title_keywords ?? "").trim());
+  nodes.push({
+    id: "keywordFilter",
+    type: "pipeline",
+    position: { x: spineX, y: ROW_GAP },
+    data: {
+      title: "Title Keyword Filter",
+      subtitle: "Deterministic pre-gate",
+      badge: "FILTER",
+      color: "teal",
+      stat: keywordGateActive ? `${counts.keywordFiltered} rejected — no LLM spent` : "Off — no title_keywords set",
+      icon: "filter",
+      disabled: !keywordGateActive,
+      selected: isSelected("keywordFilter"),
+    },
+    draggable: false,
+    width: NODE_WIDTH,
   });
 
   nodes.push({
     id: "judge",
     type: "pipeline",
-    position: { x: spineX, y: ROW_GAP },
+    position: { x: spineX, y: ROW_GAP * 2 },
     data: {
       title: "AI Judge",
       subtitle: "LLM relevance score",
       badge: "AGENT",
       color: "teal",
-      stat: `${counts.matched} passed · ${counts.filtered} failed${counts.pending > 0 ? ` · ${counts.pending} pending` : ""}`,
+      stat: `${counts.matched} passed · ${counts.filtered - counts.keywordFiltered} failed${counts.pending > 0 ? ` · ${counts.pending} pending` : ""}`,
       icon: "judge",
       selected: isSelected("judge"),
     },
@@ -219,7 +248,7 @@ function buildGraph(
   nodes.push({
     id: "duplicates",
     type: "pipeline",
-    position: { x: spineX, y: ROW_GAP * 2 },
+    position: { x: spineX, y: ROW_GAP * 3 },
     data: {
       title: "Duplicate Checker",
       subtitle: "Cross-source repost check",
@@ -236,7 +265,7 @@ function buildGraph(
   nodes.push({
     id: "company",
     type: "pipeline",
-    position: { x: spineX, y: ROW_GAP * 3 },
+    position: { x: spineX, y: ROW_GAP * 4 },
     data: {
       title: "Company Qualify",
       subtitle: "Research & caution",
@@ -254,7 +283,7 @@ function buildGraph(
   nodes.push({
     id: "notified",
     type: "pipeline",
-    position: { x: spineX, y: ROW_GAP * 4 },
+    position: { x: spineX, y: ROW_GAP * 5 },
     data: {
       title: "Notify",
       subtitle: "Telegram delivery",
@@ -271,10 +300,10 @@ function buildGraph(
   nodes.push({
     id: "filtered",
     type: "pipeline",
-    position: { x: spineX + NODE_WIDTH + SIDE_GAP, y: ROW_GAP * 2 },
+    position: { x: spineX + NODE_WIDTH + SIDE_GAP, y: ROW_GAP * 3 },
     data: {
       title: "Filtered & Archived",
-      subtitle: "Rejected by the AI judge",
+      subtitle: "Rejected by the keyword gate or the AI judge",
       badge: "OUTPUT",
       color: "gray",
       stat: `${counts.filtered} total`,
@@ -286,6 +315,8 @@ function buildGraph(
   });
 
   edges.push(
+    { id: "e-keywordFilter-judge", source: "keywordFilter", sourceHandle: "down", target: "judge", type: "pipeline", data: { label: "pass", tone: "ok" } },
+    { id: "e-keywordFilter-filtered", source: "keywordFilter", sourceHandle: "right", target: "filtered", type: "pipeline", data: { label: "no keyword", tone: "skip" } },
     { id: "e-judge-duplicates", source: "judge", sourceHandle: "down", target: "duplicates", type: "pipeline", data: { label: "pass", tone: "ok" } },
     { id: "e-judge-filtered", source: "judge", sourceHandle: "right", target: "filtered", type: "pipeline", data: { label: "fail", tone: "skip" } },
     { id: "e-duplicates-company", source: "duplicates", sourceHandle: "down", target: "company", type: "pipeline", data: { label: "unique", tone: "ok" } },
@@ -354,6 +385,8 @@ export function WorkflowGraph({
             return;
           }
           switch (node.id) {
+            case "keywordFilter":
+              return onSelect({ kind: "keywordFilter" });
             case "judge":
               return onSelect({ kind: "judge" });
             case "company":

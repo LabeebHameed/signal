@@ -22,6 +22,14 @@ export interface FilterProfile {
    * same work differently ("UI/UX Designer" ≈ "UX Engineer" ≈ "User
    * Experience Designer"), so the judge treats any of these as the role. */
   role_synonyms?: string;
+  /** Short discipline-defining WORDS (not full titles, unlike role_synonyms)
+   * — e.g. "design, UI, UX, design systems" for a Design Engineer target.
+   * A deterministic pre-filter (judge.ts titleMatchesKeywords) rejects any
+   * posting whose title contains none of these before the AI judge ever
+   * sees it — a hard backstop for cases the judge itself has gotten wrong
+   * even with full context (e.g. scoring "Android Developer" as a match for
+   * "Design Engineer"). Empty means the gate is off. */
+  title_keywords?: string;
   seniority?: string;
   locations?: string;
   skills?: string;
@@ -38,6 +46,7 @@ export interface FilterProfile {
 export const FILTER_PROFILE_KEYS: ReadonlyArray<keyof FilterProfile> = [
   "roles",
   "role_synonyms",
+  "title_keywords",
   "seniority",
   "locations",
   "skills",

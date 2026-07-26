@@ -82,6 +82,11 @@ function htmlToText(html: string): string {
     // keep hrefs so the LLM can return posting URLs
     .replace(/<a\b[^>]*href="([^"]*)"[^>]*>/gi, ' [link: $1] ')
     .replace(/<a\b[^>]*href='([^']*)'[^>]*>/gi, " [link: $1] ")
+    // Unquoted attribute values are valid HTML5 (e.g. href=/foo/bar) and used
+    // in the wild (confirmed on cryptocurrencyjobs.co, nodesk.co) — without
+    // this, every one of their per-posting links was silently dropped before
+    // the LLM ever saw them, leaving it nothing to extract a URL from.
+    .replace(/<a\b[^>]*href=([^\s"'>]+)[^>]*>/gi, ' [link: $1] ')
     .replace(/<(br|\/p|\/div|\/li|\/tr|\/h[1-6])[^>]*>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")

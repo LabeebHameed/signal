@@ -104,6 +104,21 @@ const BLOCKED_SOURCE_MESSAGE =
   "This can't be fetched automatically, so it's now only retried every few hours — " +
   "remove this source if you don't want it checked.";
 
+// Link extraction (the generic fetch+LLM path only — structured ATS/RSS
+// sources get real URLs straight from the platform, never model-extracted)
+// relies on the raw HTML actually containing a plain <a href> the model can
+// see (see htmlToText in _shared/fetcher.ts). Sites that embed links some
+// other way (an attribute style the stripper doesn't yet handle, or genuine
+// client-side rendering) leave the model nothing to extract a URL from —
+// discovered twice already (cryptocurrencyjobs.co, nodesk.co) by eyeballing
+// production data. Rather than only ever catching the next one the same
+// slow way, flag it here so a source with unreliable links is visible on
+// the Sources page the first time it happens, for any site, without anyone
+// having to notice a wrong link by hand first.
+const LOW_LINK_QUALITY_PREFIX = "Most postings on this crawl have no direct link";
+const LOW_LINK_QUALITY_MIN_ROWS = 3;
+const LOW_LINK_QUALITY_THRESHOLD = 0.5;
+
 interface PageResult {
   url: string;
   status: "ok" | "unchanged" | "error";
@@ -626,9 +641,13 @@ async function pollPage(
     const screenError = await screenPending(db, page, cfg, result);
     const companyError = await companyPending(db, page, cfg, result);
     const notifyError = await notifyPending(db, page, cfg, result);
+    // A link-quality warning was set on the crawl that last actually
+    // extracted content — nothing here re-extracts on an unchanged hash, so
+    // preserve it instead of silently wiping it after a single poll cycle.
+    const preservedWarning = page.last_error?.startsWith(LOW_LINK_QUALITY_PREFIX) ? page.last_error : null;
     await db.from("watched_pages").update({
       last_checked_at: new Date().toISOString(),
-      last_error: screenError ?? companyError ?? notifyError,
+      last_error: screenError ?? companyError ?? notifyError ?? preservedWarning,
       failure_count: 0,
       fetch_strategy: fetched.strategy,
       poll_claimed_at: null,
@@ -667,6 +686,20 @@ async function pollPage(
       filter_status: page.first_crawl_done ? "pending" : "skipped",
       raw: p,
     });
+  }
+
+  // Link-extraction health signal — generic fetch+LLM path only (structured
+  // ATS/RSS postings get real URLs straight from the platform, never
+  // model-extracted, so this can't meaningfully fire there). See
+  // LOW_LINK_QUALITY_PREFIX above for why this exists.
+  let linkWarning: string | null = null;
+  if (fetched.postings === null && rows.length >= LOW_LINK_QUALITY_MIN_ROWS) {
+    const missing = rows.filter((r) => !r.url).length;
+    if (missing / rows.length > LOW_LINK_QUALITY_THRESHOLD) {
+      linkWarning = `${LOW_LINK_QUALITY_PREFIX} (${missing}/${rows.length} this crawl) — this page's markup ` +
+        `may not expose per-posting links in a way the extractor recognizes. Postings are still tracked; ` +
+        `treat the link as unverified until you check a few by hand.`;
+    }
   }
 
   if (rows.length > 0) {
@@ -709,10 +742,11 @@ async function pollPage(
   // 8. Persist page state — always, even when screening or Telegram failed.
   const truncatedNote = fetched.truncated ? "content truncated to 100k chars before extraction" : null;
   const stepError = screenError ?? companyError ?? notifyError;
+  const softNote = [truncatedNote, linkWarning].filter(Boolean).join(" | ") || null;
   await db.from("watched_pages").update({
     last_content_hash: hash,
     last_checked_at: new Date().toISOString(),
-    last_error: stepError ?? truncatedNote,
+    last_error: stepError ?? softNote,
     failure_count: 0,
     first_crawl_done: true,
     fetch_strategy: fetched.strategy,
@@ -720,6 +754,7 @@ async function pollPage(
   }).eq("id", page.id);
 
   if (stepError) result.error = stepError;
+  else if (linkWarning) result.error = linkWarning;
   return result;
 }
 

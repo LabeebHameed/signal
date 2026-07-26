@@ -22,3 +22,15 @@ export function truncate(text: string, max: number): string {
 export function isBlockedSourceError(lastError: string | null): boolean {
   return lastError?.startsWith("Site blocks automated access") ?? false;
 }
+
+/**
+ * Whether a source's last_error is the "most postings came back with no
+ * direct link" advisory rather than a genuine fault — the crawl itself
+ * worked, but this page's markup style is one the link extractor doesn't
+ * handle well (e.g. an unusual way of embedding an anchor's href), so the
+ * per-posting link may be missing or unreliable. Matches the message
+ * poll-pages writes (LOW_LINK_QUALITY_PREFIX) — keep the two in sync.
+ */
+export function isLinkQualityWarning(lastError: string | null): boolean {
+  return lastError?.startsWith("Most postings on this crawl have no direct link") ?? false;
+}

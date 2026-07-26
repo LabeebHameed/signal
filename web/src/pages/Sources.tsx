@@ -4,7 +4,7 @@ import { api, WatchedPage } from "../api";
 import { StatusPill } from "../components/StatusPill";
 import { useToast } from "../components/Toast";
 import { Toggle } from "../components/Toggle";
-import { isBlockedSourceError, timeAgo, truncate } from "../lib/format";
+import { isBlockedSourceError, isLinkQualityWarning, timeAgo, truncate } from "../lib/format";
 
 // A snapshot of which pages a "Check now" run covers and when it started —
 // used to show a live "checking…" state per row instead of the previous
@@ -177,6 +177,10 @@ export default function Sources() {
                     ) : isBlockedSourceError(p.last_error) ? (
                       <StatusPill tone="pending" title={p.last_error ?? undefined}>
                         blocked by site
+                      </StatusPill>
+                    ) : isLinkQualityWarning(p.last_error) ? (
+                      <StatusPill tone="pending" title={p.last_error ?? undefined}>
+                        links unreliable
                       </StatusPill>
                     ) : p.last_error ? (
                       <StatusPill tone="error" title={p.last_error}>

@@ -33,6 +33,13 @@
 //                                 audit rosters — send at most one of status/screened per
 //                                 request, they override rather than intersect; duplicate
 //                                 combines with status:"matched")
+//   DELETE /postings              wipe every posting (testing/reset) and reset each
+//                                 watched page's crawl-state (content hash, error,
+//                                 failure count, claim) so the next poll re-fetches
+//                                 and re-extracts from scratch instead of short-
+//                                 circuiting on an unchanged hash. first_crawl_done
+//                                 is left as-is so re-discovered postings are
+//                                 screened (and can notify) same as any other run.
 //   POST   /poll                  trigger a poll run in the background, returns
 //                                 { started: true } immediately — watch /pages
 //                                 and /postings for results as they land
@@ -311,6 +318,32 @@ Deno.serve(async (req: Request) => {
         .range(offset, offset + limit - 1);
       if (error) throw error;
       return json({ items: data, total: count ?? 0 });
+    }
+
+    if (resource === "postings" && !resourceId && req.method === "DELETE") {
+      const { error: deleteError, count } = await db
+        .from("postings")
+        .delete({ count: "exact" })
+        .not("id", "is", null);
+      if (deleteError) throw deleteError;
+
+      // Reset crawl state so the next poll re-fetches and re-extracts every
+      // page from scratch instead of skipping extraction on an unchanged
+      // content hash. first_crawl_done is intentionally left alone: rows
+      // discovered on the next poll should be screened (and can notify),
+      // not silently treated as a fresh baseline.
+      const { error: resetError } = await db
+        .from("watched_pages")
+        .update({
+          last_content_hash: null,
+          last_error: null,
+          failure_count: 0,
+          poll_claimed_at: null,
+        })
+        .not("id", "is", null);
+      if (resetError) throw resetError;
+
+      return json({ ok: true, deleted: count ?? 0 });
     }
 
     if (resource === "profile" && resourceId === "expand" && req.method === "POST") {

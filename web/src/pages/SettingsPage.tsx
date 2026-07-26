@@ -25,7 +25,30 @@ export default function SettingsPage() {
   const [tgTest, setTgTest] = useState<{ status: "idle" | "sending" | "ok" | "fail"; message?: string }>({
     status: "idle",
   });
+  const [clearing, setClearing] = useState(false);
   const toast = useToast();
+
+  const clearPostings = async () => {
+    if (
+      !confirm(
+        "Clear all postings? This deletes every scraped posting and its screening/company history, and resets " +
+          "every source so the next check re-fetches and re-extracts from scratch. This can't be undone.",
+      )
+    ) {
+      return;
+    }
+    setClearing(true);
+    try {
+      const res = await api.clearPostings();
+      queryClient.invalidateQueries({ queryKey: ["postings"] });
+      queryClient.invalidateQueries({ queryKey: ["pages"] });
+      toast.show(`Cleared ${res.deleted} posting${res.deleted === 1 ? "" : "s"}`);
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : String(e), "error");
+    } finally {
+      setClearing(false);
+    }
+  };
 
   const testTelegram = async () => {
     setTgTest({ status: "sending" });
@@ -215,6 +238,18 @@ export default function SettingsPage() {
           {saving ? "Saving…" : "Save settings"}
         </button>
       </form>
+
+      <section className="card">
+        <h2>Danger zone</h2>
+        <p className="hint">
+          Deletes every scraped posting and its screening/company history, and resets every source so the next
+          check re-fetches and re-extracts from scratch — useful after changing extraction or filtering logic and
+          wanting a clean test run. Settings, sources, and company research are kept.
+        </p>
+        <button type="button" className="danger" disabled={clearing} onClick={clearPostings}>
+          {clearing ? "Clearing…" : "Clear all postings"}
+        </button>
+      </section>
     </div>
   );
 }

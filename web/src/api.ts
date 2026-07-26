@@ -249,6 +249,7 @@ export const api = {
     if (opts.keywordFiltered !== undefined) params.set("keyword_filtered", String(opts.keywordFiltered));
     return request<PostingsPage>(`/postings?${params}`);
   },
+  clearPostings: () => request<{ ok: boolean; deleted: number }>("/postings", { method: "DELETE" }),
   poll: () => request<{ pages: number; results: unknown[] }>("/poll", { method: "POST" }),
   testTelegram: () => request<{ ok: boolean }>("/telegram-test", { method: "POST" }),
   expandProfile: (statement: string) =>

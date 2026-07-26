@@ -7,14 +7,20 @@ import {
   Position,
   ReactFlow,
   getBezierPath,
+  useNodesState,
+  useReactFlow,
   useViewport,
   type Edge,
   type EdgeProps,
   type Node,
   type NodeProps,
 } from "@xyflow/react";
+import { useEffect, useMemo, useRef } from "react";
 import "@xyflow/react/dist/style.css";
 import type { Settings, WatchedPage } from "../api";
+
+/** Matched/filtered counts scoped to one source page, keyed by page id. */
+export type SourceStats = Record<string, { matched: number; filtered: number }>;
 
 /** Which node is selected in the graph, and enough context to fetch that
  * node's roster. Shared between the graph (click targets) and the
@@ -160,16 +166,18 @@ const COL_GAP = 36;
 const ROW_GAP = 150;
 const SIDE_GAP = 90;
 
-function sourceBadgeStat(p: WatchedPage): string {
+function sourceBadgeStat(p: WatchedPage, stats: { matched: number; filtered: number } | undefined): string {
   if (p.last_error) return `⚠ ${p.last_error}`;
   if (!p.first_crawl_done) return "awaiting first crawl";
-  return "ok";
+  const { matched = 0, filtered = 0 } = stats ?? {};
+  return `${matched} matched · ${filtered} filtered`;
 }
 
 function buildGraph(
   pages: WatchedPage[],
   settings: Settings | undefined,
   counts: FunnelCounts,
+  sourceStats: SourceStats,
   selected: InspectorState,
 ): { nodes: Node<PipelineNodeData>[]; edges: Edge<PipelineEdgeData>[] } {
   const activePages = pages.filter((p) => p.active);
@@ -193,11 +201,10 @@ function buildGraph(
         subtitle: "Watched page",
         badge: "SOURCE",
         color: "blue",
-        stat: sourceBadgeStat(p),
+        stat: sourceBadgeStat(p, sourceStats[p.id]),
         icon: "source",
         selected: isSelected(id),
       },
-      draggable: false,
       width: NODE_WIDTH,
     });
     edges.push({
@@ -224,7 +231,6 @@ function buildGraph(
       disabled: !keywordGateActive,
       selected: isSelected("keywordFilter"),
     },
-    draggable: false,
     width: NODE_WIDTH,
   });
 
@@ -241,7 +247,6 @@ function buildGraph(
       icon: "judge",
       selected: isSelected("judge"),
     },
-    draggable: false,
     width: NODE_WIDTH,
   });
 
@@ -258,7 +263,6 @@ function buildGraph(
       icon: "copy",
       selected: isSelected("duplicates"),
     },
-    draggable: false,
     width: NODE_WIDTH,
   });
 
@@ -276,7 +280,6 @@ function buildGraph(
       disabled: !companyActive,
       selected: isSelected("company"),
     },
-    draggable: false,
     width: NODE_WIDTH,
   });
 
@@ -293,7 +296,6 @@ function buildGraph(
       icon: "bell",
       selected: isSelected("notified"),
     },
-    draggable: false,
     width: NODE_WIDTH,
   });
 
@@ -310,7 +312,6 @@ function buildGraph(
       icon: "archive",
       selected: isSelected("filtered"),
     },
-    draggable: false,
     width: NODE_WIDTH,
   });
 
@@ -332,36 +333,77 @@ function ZoomReadout() {
   return <div className="wf-zoom-readout">{Math.round(zoom * 100)}%</div>;
 }
 
+/** Source pages load asynchronously (react-query), so the node set at
+ * mount-time is usually just the fixed pipeline steps — the boolean
+ * `fitView` prop only fits once, before source nodes exist, leaving them
+ * positioned outside the viewport once they arrive. Re-fitting on every
+ * node-set change would also undo a user's manual drag/pan the moment
+ * anything refetches, so this only re-fits when the set of node ids
+ * actually changes shape (a source added/removed) — not on every data
+ * refresh of the same nodes. */
+function AutoFitView({ nodeIds }: { nodeIds: string }) {
+  const { fitView } = useReactFlow();
+  const prev = useRef<string | null>(null);
+  useEffect(() => {
+    if (prev.current !== nodeIds) {
+      prev.current = nodeIds;
+      // Let the new nodes commit to the DOM before measuring their bounds.
+      requestAnimationFrame(() => fitView({ duration: 200 }));
+    }
+  }, [nodeIds, fitView]);
+  return null;
+}
+
 /**
  * Pannable/zoomable canvas of the processing pipeline — drag empty space to
- * pan, scroll/pinch to zoom, click a node to inspect it. Node positions are
- * hand-placed (the pipeline shape never changes), rendered through React
- * Flow so panning/zooming/unlimited node counts all come from the library
- * rather than hand-rolled math.
+ * pan, scroll/pinch to zoom, drag a node to reposition it, click a node to
+ * inspect it. Node positions are hand-placed by default (the pipeline shape
+ * never changes) but every node is user-draggable; a dragged node's
+ * position is preserved across data refreshes (counts poll every ~20s) by
+ * merging fresh labels/stats onto the existing node state rather than
+ * replacing it outright — only genuinely new nodes (e.g. a newly added
+ * source) start at their computed layout position.
  */
 export function WorkflowGraph({
   pages,
   settings,
   counts,
+  sourceStats,
   selected,
   onSelect,
 }: {
   pages: WatchedPage[];
   settings: Settings | undefined;
   counts: FunnelCounts;
+  sourceStats: SourceStats;
   selected: InspectorState;
   onSelect: (state: InspectorState) => void;
 }) {
-  const { nodes, edges } = buildGraph(pages, settings, counts, selected);
+  const built = useMemo(
+    () => buildGraph(pages, settings, counts, sourceStats, selected),
+    [pages, settings, counts, sourceStats, selected],
+  );
+  const [nodes, setNodes, onNodesChange] = useNodesState(built.nodes);
+  const nodeIds = useMemo(() => built.nodes.map((n) => n.id).sort().join(","), [built]);
+
+  useEffect(() => {
+    setNodes((current) => {
+      const byId = new Map(current.map((n) => [n.id, n]));
+      return built.nodes.map((n) => {
+        const existing = byId.get(n.id);
+        return existing ? { ...n, position: existing.position } : n;
+      });
+    });
+  }, [built, setNodes]);
 
   return (
     <div className="wf-canvas">
       <ReactFlow
         nodes={nodes}
-        edges={edges}
+        edges={built.edges}
+        onNodesChange={onNodesChange}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
-        nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={false}
         panOnDrag
@@ -375,7 +417,6 @@ export function WorkflowGraph({
         zoomOnPinch
         minZoom={0.2}
         maxZoom={1.5}
-        fitView
         proOptions={{ hideAttribution: true }}
         onNodeClick={(_, node) => {
           if (node.id.startsWith("source:")) {
@@ -403,6 +444,7 @@ export function WorkflowGraph({
         <Background gap={24} size={1} className="wf-canvas-bg" />
         <Controls showInteractive={false} />
         <ZoomReadout />
+        <AutoFitView nodeIds={nodeIds} />
       </ReactFlow>
     </div>
   );

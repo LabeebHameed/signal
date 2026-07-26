@@ -1,7 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { api } from "../api";
-import { WorkflowGraph, type FunnelCounts, type InspectorState } from "../components/WorkflowGraph";
+import { api, type WatchedPage } from "../api";
+import { WorkflowGraph, type FunnelCounts, type InspectorState, type SourceStats } from "../components/WorkflowGraph";
 import { WorkflowInspector } from "../components/WorkflowInspector";
 
 /** limit:1 — only .total is read, same count-only query pattern Dashboard.tsx
@@ -69,11 +69,40 @@ function useFunnelCounts(): FunnelCounts {
   };
 }
 
+/** Matched/filtered counts scoped to each active source page, for the
+ * graph's per-source node badges. Same queryKey shape as SourcePanel's own
+ * per-source counts (WorkflowInspector.tsx), so selecting a source the graph
+ * already aggregated hits a warm cache instead of refetching. */
+function useSourceStats(pages: WatchedPage[]): SourceStats {
+  const activePages = pages.filter((p) => p.active);
+  const matchedQueries = useQueries({
+    queries: activePages.map((p) => ({
+      queryKey: ["postings", "workflow", "source", p.id, "count", "matched"],
+      queryFn: () => api.listPostings({ pageId: p.id, limit: 1, status: "matched" as const }),
+    })),
+  });
+  const filteredQueries = useQueries({
+    queries: activePages.map((p) => ({
+      queryKey: ["postings", "workflow", "source", p.id, "count", "filtered"],
+      queryFn: () => api.listPostings({ pageId: p.id, limit: 1, status: "filtered" as const }),
+    })),
+  });
+  const stats: SourceStats = {};
+  activePages.forEach((p, i) => {
+    stats[p.id] = {
+      matched: matchedQueries[i]?.data?.total ?? 0,
+      filtered: filteredQueries[i]?.data?.total ?? 0,
+    };
+  });
+  return stats;
+}
+
 export default function Workflow() {
   const [selected, setSelected] = useState<InspectorState>({ kind: "overview" });
   const { data: pages = [] } = useQuery({ queryKey: ["pages"], queryFn: api.listPages });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: api.getSettings });
   const counts = useFunnelCounts();
+  const sourceStats = useSourceStats(pages);
 
   return (
     <div className="page">
@@ -88,7 +117,14 @@ export default function Workflow() {
 
       <div className="workflow-split">
         <section className="card wf-canvas-card">
-          <WorkflowGraph pages={pages} settings={settings} counts={counts} selected={selected} onSelect={setSelected} />
+          <WorkflowGraph
+            pages={pages}
+            settings={settings}
+            counts={counts}
+            sourceStats={sourceStats}
+            selected={selected}
+            onSelect={setSelected}
+          />
         </section>
         <aside className="card wf-sidebar">
           {selected.kind !== "overview" && (

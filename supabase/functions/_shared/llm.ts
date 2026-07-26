@@ -46,10 +46,10 @@ Return every individual job posting visible in the content. For each posting inc
 - title (required): the job title exactly as shown
 - url: the posting's link if one appears near it (may be relative)
 - company: the hiring company if identifiable
-- location: the location(s) shown for the posting, verbatim
+- location: the location(s) shown for the posting, verbatim. Include work arrangement (Remote, Hybrid, On-site) here when shown — these describe where the work happens, not pay.
 - posted_text: if the page shows when the job was posted (e.g. "2 days ago", "Posted Mar 3", "3h"), that text verbatim
 - posted_at: the same posted date as an ISO date (YYYY-MM-DD), computed from today's date when the page shows a relative time. Omit if the page shows no posted date — never guess.
-- compensation: ONLY the pay figure/range as shown for the posting, verbatim (e.g. "$150K - $200K", "$45/hr") — never tags, categories, skills, or any other page metadata, even if it appears near the posting. Omit if the page shows no pay for this posting — never estimate or guess.
+- compensation: ONLY the pay figure/range as shown for the posting, verbatim (e.g. "$150K - $200K", "$45/hr") — never tags, categories, skills, or any other page metadata, even if it appears near the posting. Employment type ("Full Time", "Part Time", "Contract", "Freelance") and work arrangement ("Remote", "Hybrid", "On-site") are NEVER compensation — do not put them here even if no other field fits. Omit if the page shows no pay for this posting — never estimate or guess.
 
 Do NOT filter, judge, or deduplicate beyond obvious exact repeats. Do NOT invent postings or fields that are not in the content. Navigation links, department headers, and generic buttons are not postings.
 
@@ -131,6 +131,20 @@ const MAX_COMPENSATION_CHARS = 100;
 const MAX_LOCATION_CHARS = 200;
 const MAX_TITLE_CHARS = 300;
 
+/** Real compensation always contains at least one digit or currency symbol,
+ * and isn't malformed (e.g. ",000 - ,000" from a number split by HTML-tag
+ * stripping — see htmlToText's rejoin regex in fetcher.ts, which prevents
+ * most of these but not ones the LLM introduces itself). Employment types
+ * ("Full Time"), work arrangements ("Remote"), and other non-pay metadata
+ * the model sometimes misassigns here are rejected. */
+function looksLikeCompensation(value: string): boolean {
+  const v = value.trim();
+  if (!/[\d$€£¥₹₩]/.test(v)) return false;
+  if (/^[^\w$€£¥₹₩]/.test(v)) return false; // starts with punctuation, e.g. ",000"
+  if (/(^|[^\d])\s*,\s*\d{3}\b/.test(v)) return false; // orphan comma-thousands
+  return true;
+}
+
 function validatePostings(parsed: unknown): ExtractedPosting[] {
   if (typeof parsed !== "object" || parsed === null || !Array.isArray((parsed as { postings?: unknown }).postings)) {
     throw new Error("LLM response is not of shape {postings: [...]}");
@@ -152,7 +166,10 @@ function validatePostings(parsed: unknown): ExtractedPosting[] {
       location: location !== "" && location.length <= MAX_LOCATION_CHARS ? location : undefined,
       posted_at: postedAt,
       posted_text: typeof p.posted_text === "string" && p.posted_text.trim() !== "" ? p.posted_text.trim() : undefined,
-      compensation: compensation !== "" && compensation.length <= MAX_COMPENSATION_CHARS ? compensation : undefined,
+      compensation: compensation !== "" && compensation.length <= MAX_COMPENSATION_CHARS &&
+          looksLikeCompensation(compensation)
+        ? compensation
+        : undefined,
     });
   }
   return out;

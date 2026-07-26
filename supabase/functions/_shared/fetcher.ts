@@ -91,6 +91,10 @@ function htmlToText(html: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/[ \t]+/g, " ")
+    // Rejoin numbers split by tag stripping, e.g. "$150 ,000" -> "$150,000"
+    // (a <span> around the thousands group leaves a stray space+comma that
+    // otherwise reaches the LLM as ",000" and gets misread as a separate value).
+    .replace(/(\$?\b\d+)\s+,\s*(\d{3}\b)/g, "$1,$2")
     .replace(/\n\s*\n+/g, "\n")
     .trim();
 }

@@ -589,7 +589,34 @@ async function pollPage(
   // 1. Fetch: a known ATS platform or RSS feed skips HTML+LLM entirely
   // (structured data straight from the source, immune to the anti-bot walls
   // generic fetching runs into); otherwise the generic fetch chain.
-  const fetched = await fetchPageForPolling(page);
+  let fetched: PageContent;
+  try {
+    fetched = await fetchPageForPolling(page);
+  } catch (fetchError) {
+    // A page can accumulate a screening/company/notify backlog (e.g. a
+    // transient judge failure) and then start failing to fetch entirely (a
+    // wall going up) — that backlog normally only clears once fetching
+    // succeeds again (the hash-unchanged branch below), which would leave it
+    // stuck for as long as the page keeps failing. Clear it here too, in the
+    // same invocation, regardless of the fetch outcome.
+    const screenError = await screenPending(db, page, cfg, result);
+    const companyError = await companyPending(db, page, cfg, result);
+    const notifyError = await notifyPending(db, page, cfg, result);
+
+    const message = fetchError instanceof Error ? fetchError.message : String(fetchError);
+    const newFailureCount = page.failure_count + 1;
+    const durablyBlocked = isBlockedError(message) && newFailureCount >= DURABLE_FAILURE_THRESHOLD;
+    const backlogError = screenError ?? companyError ?? notifyError;
+    await db.from("watched_pages").update({
+      last_checked_at: new Date().toISOString(),
+      last_error: durablyBlocked ? BLOCKED_SOURCE_MESSAGE : message.slice(0, 500),
+      failure_count: newFailureCount,
+      poll_claimed_at: null,
+    }).eq("id", page.id);
+    result.status = "error";
+    result.error = backlogError ? `${message} | backlog: ${backlogError}` : message;
+    return result;
+  }
 
   // 2. Hash short-circuit: nothing changed → no extraction call. Still work
   // through any backlog left by earlier failures: unscreened postings (a

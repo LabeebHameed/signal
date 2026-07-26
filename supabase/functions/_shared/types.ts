@@ -66,6 +66,21 @@ export interface PostingVerdict {
   title_mismatch: string | null;
 }
 
+export interface FounderInfo {
+  name: string;
+  title: string | null;
+  x_url: string | null;
+  linkedin_url: string | null;
+  bio: string | null;
+}
+
+export interface CompanySocials {
+  linkedin_url: string | null;
+  x_url: string | null;
+  github_url: string | null;
+  crunchbase_url: string | null;
+}
+
 /**
  * Everything the researcher could establish about one company from live web
  * evidence (companies.dossier). Nullable fields mean "the evidence didn't
@@ -76,6 +91,8 @@ export interface CompanyDossier {
   website: string | null;
   /** 1–2 sentences: what the company actually does / has done. */
   summary: string;
+  /** 2–3 sentences on products/services, target market, and business model. */
+  product_breakdown: string;
   industry: string | null;
   /** e.g. "~120 employees" */
   size_estimate: string | null;
@@ -86,6 +103,10 @@ export interface CompanyDossier {
   founded: string | null;
   /** Short recognizable category, e.g. "Startup", "Public company", "Non-profit", "B2B SaaS", "Agency". */
   company_type: string | null;
+  /** Identified founders or C-level executives, with social links when evidence has them. */
+  founders: FounderInfo[];
+  /** Official company social pages. */
+  socials: CompanySocials;
   /** verified = multiple independent sources confirm a real operating company;
    * likely_real = credible footprint but thin; uncertain = almost no
    * independent footprint (caution, not accusation); suspicious = concrete

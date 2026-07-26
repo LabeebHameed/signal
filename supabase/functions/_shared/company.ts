@@ -122,12 +122,39 @@ const DOSSIER_SCHEMA = {
     name: { type: "string" },
     website: { type: ["string", "null"] },
     summary: { type: "string" },
+    product_breakdown: { type: "string" },
     industry: { type: ["string", "null"] },
     size_estimate: { type: ["string", "null"] },
     stage: { type: ["string", "null"] },
     funding: { type: ["string", "null"] },
     founded: { type: ["string", "null"] },
     company_type: { type: ["string", "null"] },
+    founders: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          title: { type: ["string", "null"] },
+          x_url: { type: ["string", "null"] },
+          linkedin_url: { type: ["string", "null"] },
+          bio: { type: ["string", "null"] },
+        },
+        required: ["name", "title", "x_url", "linkedin_url", "bio"],
+        additionalProperties: false,
+      },
+    },
+    socials: {
+      type: "object",
+      properties: {
+        linkedin_url: { type: ["string", "null"] },
+        x_url: { type: ["string", "null"] },
+        github_url: { type: ["string", "null"] },
+        crunchbase_url: { type: ["string", "null"] },
+      },
+      required: ["linkedin_url", "x_url", "github_url", "crunchbase_url"],
+      additionalProperties: false,
+    },
     legitimacy: { type: "string", enum: LEGITIMACY_LEVELS },
     flags: { type: "array", items: { type: "string" } },
     confidence: { type: "string", enum: CONFIDENCE_LEVELS },
@@ -142,18 +169,21 @@ const DOSSIER_SCHEMA = {
     },
   },
   required: [
-    "name", "website", "summary", "industry", "size_estimate", "stage",
-    "funding", "founded", "company_type", "legitimacy", "flags", "confidence", "sources",
+    "name", "website", "summary", "product_breakdown", "industry", "size_estimate", "stage",
+    "funding", "founded", "company_type", "founders", "socials", "legitimacy", "flags", "confidence", "sources",
   ],
   additionalProperties: false,
 } as const;
 
-const DOSSIER_SYSTEM_PROMPT = `You research companies for a job seeker deciding whether a job posting is worth pursuing — including whether the company is real at all. You get web search results about one company. Build a factual dossier STRICTLY from the evidence provided; never from prior knowledge alone, never invented.
+const DOSSIER_SYSTEM_PROMPT = `You research companies for a job seeker deciding whether a job posting is worth pursuing — including whether the company is real and who leads it. You get web search results about one company. Build a factual dossier STRICTLY from the evidence provided; never from prior knowledge alone, never invented.
 
 - summary: 1–2 sentences on what the company actually does / has done.
+- product_breakdown: 2–3 sentences on the company's products/services, target market, and business model, based on the evidence. Empty string if the evidence doesn't support it.
 - website: the company's own site if the evidence shows it, else null.
 - size_estimate, stage, funding, founded: only when the evidence states them, else null. For funding include the year ("$12M Series A, 2024").
 - company_type: a short 1–3 word category the seeker would instantly recognize — e.g. "Startup", "Public company", "Non-profit", "B2B SaaS", "Agency", "Enterprise". Base it on the evidence (stage, structure, business model); null only when truly indeterminable.
+- founders: array of { name, title, x_url, linkedin_url, bio } for founders, the CEO, or other C-level executives named in the evidence, with their X/LinkedIn profile URLs when present. Empty array if none are named in the evidence — never guess a name.
+- socials: { linkedin_url, x_url, github_url, crunchbase_url } — the company's own official pages, only when the evidence shows them, else null.
 - legitimacy:
   - "verified" — multiple independent sources confirm a real operating company.
   - "likely_real" — credible footprint but thin (few sources, small company).
@@ -176,7 +206,10 @@ export async function researchCompany(
   hint: string,
   runtime: RuntimeConfig,
 ): Promise<CompanyDossier> {
-  const results = await tavilySearch(`"${displayName}" company funding employees`, runtime.tavilyApiKey);
+  const results = await tavilySearch(
+    `"${displayName}" company founder CEO linkedin twitter x.com funding employees`,
+    runtime.tavilyApiKey,
+  );
   const rendered = results.length === 0
     ? "(the web search returned no results for this company)"
     : results
@@ -224,16 +257,44 @@ function validateDossier(parsed: unknown, fallbackName: string): CompanyDossier 
       sources.push({ title: typeof src.title === "string" ? src.title.trim() : "", url: src.url.trim() });
     }
   }
+  const founders: CompanyDossier["founders"] = [];
+  if (Array.isArray(d.founders)) {
+    for (const item of d.founders) {
+      if (typeof item !== "object" || item === null) continue;
+      const f = item as Record<string, unknown>;
+      const name = optString(f.name);
+      if (!name) continue;
+      founders.push({
+        name,
+        title: optString(f.title),
+        x_url: optString(f.x_url),
+        linkedin_url: optString(f.linkedin_url),
+        bio: optString(f.bio),
+      });
+    }
+  }
+
+  const soc = typeof d.socials === "object" && d.socials !== null ? (d.socials as Record<string, unknown>) : {};
+  const socials: CompanyDossier["socials"] = {
+    linkedin_url: optString(soc.linkedin_url),
+    x_url: optString(soc.x_url),
+    github_url: optString(soc.github_url),
+    crunchbase_url: optString(soc.crunchbase_url),
+  };
+
   return {
     name: optString(d.name) ?? fallbackName,
     website: optString(d.website),
     summary: typeof d.summary === "string" ? d.summary.trim() : "",
+    product_breakdown: typeof d.product_breakdown === "string" ? d.product_breakdown.trim() : "",
     industry: optString(d.industry),
     size_estimate: optString(d.size_estimate),
     stage: optString(d.stage),
     funding: optString(d.funding),
     founded: optString(d.founded),
     company_type: optString(d.company_type),
+    founders,
+    socials,
     legitimacy,
     flags,
     confidence,

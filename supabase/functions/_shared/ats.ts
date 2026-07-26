@@ -9,7 +9,7 @@
 
 import type { ExtractedPosting } from "./types.ts";
 
-export type AtsStrategy = "greenhouse" | "lever" | "ashby" | "rss";
+export type AtsStrategy = "greenhouse" | "lever" | "ashby" | "himalayas" | "rss";
 
 export interface AtsResult {
   strategy: AtsStrategy;
@@ -89,6 +89,74 @@ async function fetchAshby(pageUrl: string): Promise<AtsResult | null> {
     .filter((p) => p.title !== "");
   if (postings.length === 0) return null;
   return { strategy: "ashby", postings };
+}
+
+/** himalayas.app/jobs/... → the free public JSON search API, no key required.
+ * Completely bypasses the Cloudflare anti-bot wall on the website.
+ * Strips the massive HTML description fields before JSON.parse to stay
+ * within Deno's memory limit. */
+async function fetchHimalayas(pageUrl: string): Promise<AtsResult | null> {
+  const url = new URL(pageUrl);
+  if (!/(^|\.)himalayas\.app$/.test(url.hostname)) return null;
+  const keyword = url.searchParams.get("keyword") || url.searchParams.get("q") || "design";
+  const apiUrl = `https://himalayas.app/jobs/api/search?q=${encodeURIComponent(keyword)}&limit=20&offset=0`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  let rawText: string;
+  try {
+    const res = await fetch(apiUrl, {
+      headers: { "Accept": "application/json" },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    rawText = await res.text();
+  } finally {
+    clearTimeout(timer);
+  }
+
+  // Strip the heavy "description" fields (full HTML per job, several KB each)
+  // before parsing — we never use them and they dominate the response size.
+  rawText = rawText.replace(/"description"\s*:\s*"(?:[^"\\]|\\.)*"/g, '"description":""');
+
+  const data = JSON.parse(rawText) as {
+    jobs?: Array<{
+      title?: string;
+      companyName?: string;
+      companySlug?: string;
+      locationRestrictions?: string[];
+      minSalary?: number | null;
+      maxSalary?: number | null;
+      currency?: string | null;
+      salaryPeriod?: string;
+    }>;
+  };
+
+  const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+  const postings: ExtractedPosting[] = [];
+  for (const j of jobs) {
+    const title = (j.title ?? "").trim();
+    if (!title) continue;
+    const company = j.companyName ?? undefined;
+    const companySlug = j.companySlug ?? "";
+    const jobUrl = companySlug
+      ? `https://himalayas.app/companies/${companySlug}/jobs/${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-+$/, "")}`
+      : undefined;
+    const location = (j.locationRestrictions ?? []).length > 0
+      ? j.locationRestrictions!.join(", ")
+      : "Remote";
+    let compensation: string | undefined;
+    if (j.minSalary || j.maxSalary) {
+      const cur = j.currency ?? "USD";
+      const period = j.salaryPeriod ?? "annual";
+      compensation = j.minSalary && j.maxSalary
+        ? `${cur} ${j.minSalary.toLocaleString()}–${j.maxSalary.toLocaleString()} ${period}`
+        : `${cur} ${(j.minSalary ?? j.maxSalary)!.toLocaleString()} ${period}`;
+    }
+    postings.push({ title, company, location, compensation, url: jobUrl });
+  }
+  if (postings.length === 0) return null;
+  return { strategy: "himalayas", postings };
 }
 
 function extractTag(xml: string, tag: string): string | null {
@@ -249,7 +317,7 @@ async function fetchRss(pageUrl: string): Promise<AtsResult | null> {
  * nothing applies; the caller falls back to generic fetch + LLM extraction.
  */
 export async function fetchStructured(pageUrl: string, tryRss: boolean): Promise<AtsResult | null> {
-  for (const fetcher of [fetchGreenhouse, fetchLever, fetchAshby]) {
+  for (const fetcher of [fetchGreenhouse, fetchLever, fetchAshby, fetchHimalayas]) {
     try {
       const result = await fetcher(pageUrl);
       if (result) return result;

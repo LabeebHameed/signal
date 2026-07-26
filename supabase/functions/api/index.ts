@@ -48,6 +48,9 @@
 //   POST   /company-test          { name } → research one company synchronously and
 //                                 return the raw dossier (for debugging the company
 //                                 layer; requires a Tavily API key)
+//   GET    /companies             list every researched/cached company (directory)
+//   POST   /companies/:id/research  force a fresh re-research of one company,
+//                                 overwriting its cached dossier
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -111,7 +114,7 @@ Deno.serve(async (req: Request) => {
   // Function URLs look like /functions/v1/api/<route>; strip up to the function name.
   const pathname = new URL(req.url).pathname;
   const route = pathname.replace(/^.*?\/api/, "") || "/";
-  const [, resource, resourceId] = route.split("/");
+  const [, resource, resourceId, action] = route.split("/");
 
   try {
     if (resource === "pages" && !resourceId && req.method === "GET") {
@@ -386,6 +389,32 @@ Deno.serve(async (req: Request) => {
       if (name === "") return json({ error: "name is required" }, 400);
       const dossier = await researchCompany(name, "manual test from Settings", cfg);
       return json({ dossier });
+    }
+
+    if (resource === "companies" && !resourceId && req.method === "GET") {
+      const { data, error } = await db.from("companies").select("*").order("created_at", { ascending: false });
+      if (error) throw error;
+      return json(data);
+    }
+
+    if (resource === "companies" && resourceId && action === "research" && req.method === "POST") {
+      if (!cfg.tavilyApiKey.trim()) {
+        return json({ error: "company research needs a Tavily API key (free at tavily.com) — set it in Settings" }, 400);
+      }
+      const { data: company, error: fetchErr } = await db.from("companies").select("*").eq("id", resourceId).single();
+      if (fetchErr || !company) return json({ error: "company not found" }, 404);
+
+      const dossier = await researchCompany(company.display_name, "manual directory research", cfg);
+      const { data: updated, error: updateErr } = await db.from("companies").update({
+        dossier,
+        legitimacy: dossier.legitimacy,
+        research_status: "ok",
+        research_error: null,
+        failure_count: 0,
+        researched_at: new Date().toISOString(),
+      }).eq("id", resourceId).select().single();
+      if (updateErr) throw updateErr;
+      return json(updated);
     }
 
     if (resource === "poll" && req.method === "POST") {

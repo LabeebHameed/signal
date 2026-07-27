@@ -40,9 +40,29 @@ export interface LinkAttempt {
   at: string;
 }
 
+/** The currencies the compensation range can be expressed in. */
+export const COMP_CURRENCIES = ["USD", "EUR", "GBP", "INR"] as const;
+export type CompCurrency = (typeof COMP_CURRENCIES)[number];
+
+/** Whether a compensation range is stated per year or per month. */
+export const COMP_PERIODS = ["year", "month"] as const;
+export type CompPeriod = (typeof COMP_PERIODS)[number];
+
+/** The profile fields whose values are edited as discrete tags rather than
+ * free text, and whose per-value AI/user provenance is therefore tracked. */
+export const TAGGED_PROFILE_KEYS = ["role_synonyms", "title_keywords"] as const;
+export type TaggedProfileKey = (typeof TAGGED_PROFILE_KEYS)[number];
+
 /**
- * What the user is looking for — a title-screening profile. Every field is
- * optional free text; an entirely empty profile disables filtering.
+ * What the user is looking for — a title-screening profile. An entirely empty
+ * profile disables filtering.
+ *
+ * The five string fields below are the canonical form the judge reads. The
+ * structured fields after them are what the Profile page actually edits;
+ * `locations` and `compensation` are DERIVED from those on every save (see the
+ * settings PUT in functions/api), so the judge's view never drifts from the
+ * UI's and profiles written before the structured fields existed keep working
+ * untouched.
  */
 export interface FilterProfile {
   /** The target role, close to the seeker's own words. */
@@ -59,15 +79,45 @@ export interface FilterProfile {
    * even with full context (e.g. scoring "Android Developer" as a match for
    * "Design Engineer"). Empty means the gate is off. */
   title_keywords?: string;
-  /** Location / remote preference. User-entered, never LLM-generated. */
+  /** Location / remote preference, DERIVED from locations_include/exclude.
+   * User-entered, never LLM-generated. */
   locations?: string;
-  /** Pay expectation. User-entered, never LLM-generated. */
+  /** Pay expectation, DERIVED from the compensation_* fields below.
+   * User-entered, never LLM-generated. */
   compensation?: string;
+
+  /** Places the seeker will work. Non-empty means a posting must state one of
+   * them — or state no location at all — to survive the pre-filter. */
+  locations_include?: string[];
+  /** Places the seeker will not work. A posting stating any of them is
+   * rejected outright, even when it also matches an include entry. */
+  locations_exclude?: string[];
+  /** Floor of the target pay range, as a raw number (e.g. 120000). */
+  compensation_min?: number;
+  /** Ceiling of the target pay range. Never rejects on its own — a posting
+   * paying above the range is a good problem to have. */
+  compensation_max?: number;
+  compensation_period?: CompPeriod;
+  compensation_currency?: CompCurrency;
+  /** Which values in the tagged fields came from the LLM expansion rather
+   * than the seeker's own typing — drives the Profile page's tag colouring.
+   * A value edited by hand is dropped from here and becomes user-authored. */
+  ai_generated?: Partial<Record<TaggedProfileKey, string[]>>;
 }
 
+/** The prose fields — the only ones the judge reads, and the only ones that
+ * hold a plain string. Distinct from `keyof FilterProfile`, which now also
+ * spans the structured arrays/numbers the Profile page edits. */
+export type ProfileTextKey =
+  | "roles"
+  | "role_synonyms"
+  | "title_keywords"
+  | "locations"
+  | "compensation";
+
 /** Canonical profile field order — shared by the API sanitizer and the judge
- * prompt so both stay in sync. */
-export const FILTER_PROFILE_KEYS: ReadonlyArray<keyof FilterProfile> = [
+ * prompt so both stay in sync. The judge only ever reads these five. */
+export const FILTER_PROFILE_KEYS: ReadonlyArray<ProfileTextKey> = [
   "roles",
   "role_synonyms",
   "title_keywords",
@@ -77,7 +127,9 @@ export const FILTER_PROFILE_KEYS: ReadonlyArray<keyof FilterProfile> = [
 
 /** The subset of the profile the LLM expansion generates from the seeker's
  * one-sentence statement — locations/compensation are always user-entered. */
-export const GENERATED_PROFILE_KEYS: ReadonlyArray<keyof FilterProfile> = [
+export type GeneratedProfileKey = Extract<ProfileTextKey, "roles" | "role_synonyms" | "title_keywords">;
+
+export const GENERATED_PROFILE_KEYS: ReadonlyArray<GeneratedProfileKey> = [
   "roles",
   "role_synonyms",
   "title_keywords",

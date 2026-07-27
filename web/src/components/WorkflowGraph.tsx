@@ -220,17 +220,29 @@ function buildGraph(
     });
   });
 
-  const keywordGateActive = Boolean((settings?.filter_profile.title_keywords ?? "").trim());
+  // One node covers all three deterministic checks — title keywords,
+  // locations, and the pay floor. They share the keyword_filtered flag
+  // backend-side (see poll-pages preFilterVerdict), so they're one stage here
+  // too rather than three nodes the seeker has to mentally re-join.
+  const profile = settings?.filter_profile;
+  const keywordGateActive = Boolean(
+    (profile?.title_keywords ?? "").trim() ||
+      (profile?.locations_include?.length ?? 0) > 0 ||
+      (profile?.locations_exclude?.length ?? 0) > 0 ||
+      (profile?.compensation_min ?? 0) > 0,
+  );
   nodes.push({
     id: "keywordFilter",
     type: "pipeline",
     position: { x: spineX, y: ROW_GAP },
     data: {
-      title: "Title Keyword Filter",
+      title: "Keyword Filter",
       subtitle: "Deterministic pre-gate",
       badge: "FILTER",
       color: "teal",
-      stat: keywordGateActive ? `${counts.keywordFiltered} rejected — no LLM spent` : "Off — no title_keywords set",
+      stat: keywordGateActive
+        ? `${counts.keywordFiltered} rejected — no LLM spent`
+        : "Off — no keywords, locations, or pay floor set",
       icon: "filter",
       disabled: !keywordGateActive,
       selected: isSelected("keywordFilter"),

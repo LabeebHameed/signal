@@ -190,9 +190,23 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 
 - **The profile has exactly five fields**, all on the Profile page: target
   role, equivalent titles, and title keywords (all generated from your
-  one-sentence statement, then editable), plus location/remote preference and
+  one-sentence statement, then editable), plus locations and target
   compensation (always entered directly — the statement never touches them).
   An empty profile disables filtering — every new posting notifies.
+- **Equivalent titles, title keywords, and negative keywords are edited as
+  tags**, not comma-separated text. Enter (or a comma) turns what you typed
+  into a tag; Backspace on the empty field turns the last tag back into
+  editable text. Tags the AI generated are shown in purple, tags you wrote
+  yourself in the page's neutral grey — and editing an AI tag makes it yours.
+- **Locations are two lists: Include and Exclude.** Include means "only these
+  places" — but a posting that states *no* location still passes, because
+  most sources don't publish one and rejecting them would throw away the
+  majority of real matches. Exclude means "never these places", and beats
+  Include when both match. Leave both empty and no location filtering
+  happens at all.
+- **Target compensation is a range** — From/To, a currency, and per year or
+  per month. It's shown the way people say it ("$120K – $160K / yr") and
+  that exact string is what the judge screens with.
 - **Switching categories entirely** (e.g. "Design Engineer" → "Designer")?
   Editing the statement and hitting Generate fully *replaces* the target-role
   fields, it never merges old and new text together. **Clear profile** wipes
@@ -209,19 +223,26 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   like "Engineer" is never enough on its own. A seniority-qualified variant
   of the target role ("Senior Front-End Engineer") is still in scope.
 - **Two deterministic backstops**, because the LLM has repeatedly gotten
-  title scope wrong even with full context in hand: a **title-keyword gate**
-  runs before the judge ever sees a posting — a title sharing none of the
-  profile's declared title keywords is rejected outright, no LLM call spent
-  (tracked separately in the Workflow page as its own pipeline step). A
-  **thin-posting backstop** runs after the judge's own verdict, for postings
-  whose source hands over almost nothing (no company/location/compensation,
-  just a bare title) — a textual scope check against the target role forces
-  a mismatch the model missed.
-- **Location and compensation are metadata checks, not title checks.** The
-  judge reads the posting's own location/pay fields against your stated
-  preference — never the title. Missing information is neutral, never
-  disqualifying: a posting with no pay shown simply isn't checked against
-  your compensation preference.
+  title scope wrong even with full context in hand. The **keyword filter**
+  runs before the judge ever sees a posting and spends no LLM call at all;
+  it's one pipeline step on the Workflow page, covering three checks:
+  1. the title shares none of the profile's declared title keywords;
+  2. the location matches an Exclude entry, or is stated and isn't in
+     Include;
+  3. the stated pay provably tops out below your floor, in the same
+     currency.
+
+  A **thin-posting backstop** then runs *after* the judge's own verdict, for
+  postings whose source hands over almost nothing (no company/location/
+  compensation, just a bare title) — a textual scope check against the target
+  role forces a mismatch the model missed.
+- **Location and compensation are metadata checks, not title checks.** Both
+  the keyword filter and the judge read the posting's own location/pay
+  fields — never the title. Missing information is neutral, never
+  disqualifying: the large majority of postings disclose no pay at all, and
+  those always pass through to the judge. Pay in a currency other than yours
+  isn't screened either, since there are no FX rates in the system to compare
+  with. What the filter can't decide, the judge still weighs.
 - **Only "match" notifies.** Borderline and mismatch verdicts are kept in the
   Postings page, visible with the judge's one-line reasoning, but silent.
 - **Failures hold, they don't guess.** If the judge call fails, postings stay

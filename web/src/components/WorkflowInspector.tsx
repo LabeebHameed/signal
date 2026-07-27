@@ -192,7 +192,7 @@ function JudgePanel({ counts }: { counts: FunnelCounts }) {
         <h2>AI Judge</h2>
       </div>
       <p className="hint">
-        The LLM's verdict on every posting that passed the title keyword filter — the exact stored reason
+        The LLM's verdict on every posting that passed the keyword filter — the exact stored reason
         (off-target title, or the judge's summary), never a fresh explanation.
       </p>
       <Tabs
@@ -215,8 +215,13 @@ function JudgePanel({ counts }: { counts: FunnelCounts }) {
 }
 
 function KeywordFilterPanel({ counts, settings }: { counts: FunnelCounts; settings: Settings | undefined }) {
-  const keywords = settings?.filter_profile.title_keywords ?? "";
-  const active = keywords.trim() !== "";
+  const profile = settings?.filter_profile;
+  const keywords = (profile?.title_keywords ?? "").trim();
+  const include = profile?.locations_include ?? [];
+  const exclude = profile?.locations_exclude ?? [];
+  const payFloor = (profile?.compensation ?? "").trim();
+  const hasPayFloor = (profile?.compensation_min ?? 0) > 0;
+  const active = keywords !== "" || include.length > 0 || exclude.length > 0 || hasPayFloor;
   const { data, isLoading } = useQuery({
     queryKey: ["postings", "workflow", "keywordFilter"],
     queryFn: () =>
@@ -226,22 +231,45 @@ function KeywordFilterPanel({ counts, settings }: { counts: FunnelCounts; settin
   return (
     <>
       <div className="card-header">
-        <h2>Title Keyword Filter</h2>
+        <h2>Keyword Filter</h2>
       </div>
       {!active ? (
         <p className="hint">
-          This gate is off — no title_keywords declared on the profile. Set it on the Profile page (generated
-          automatically alongside the rest of the profile, or add it by hand) to reject postings whose title shares
-          none of the discipline's core words before they ever reach the AI judge.
+          This gate is off — the profile declares no title keywords, locations, or pay floor. Set any of them on the
+          Profile page to reject postings before they ever reach the AI judge.
         </p>
       ) : (
         <>
           <p className="hint">
-            Runs before the AI judge, for every source: a posting whose title contains none of{" "}
-            <strong>{keywords}</strong> is rejected right here — deterministic, no LLM call spent. This is the hard
-            backstop for cases the judge itself has gotten wrong even with full context (e.g. scoring an unrelated
-            "Android Developer" posting as a match).
+            Runs before the AI judge, for every source. Everything it rejects is deterministic — no LLM call spent:
           </p>
+          <ul className="hint">
+            {keywords !== "" && (
+              <li>
+                Title contains none of <strong>{keywords}</strong>. This is the hard backstop for cases the judge
+                itself has gotten wrong even with full context (e.g. scoring an unrelated "Android Developer"
+                posting as a match).
+              </li>
+            )}
+            {exclude.length > 0 && (
+              <li>
+                Location matches an excluded place — <strong>{exclude.join(", ")}</strong> — even when an included
+                one also matches.
+              </li>
+            )}
+            {include.length > 0 && (
+              <li>
+                Location is stated and isn't one of <strong>{include.join(", ")}</strong>. A posting that states no
+                location at all still passes.
+              </li>
+            )}
+            {hasPayFloor && (
+              <li>
+                Stated pay provably tops out below <strong>{payFloor}</strong>, in the same currency. Postings that
+                don't disclose pay — the large majority — always pass.
+              </li>
+            )}
+          </ul>
           <PostingRoster
             items={data?.items ?? []}
             total={counts.keywordFiltered}
@@ -358,7 +386,7 @@ function FilteredPanel({ counts }: { counts: FunnelCounts }) {
       <div className="card-header">
         <h2>Filtered &amp; Archived</h2>
       </div>
-      <p className="hint">Postings rejected by the title keyword filter or the AI judge.</p>
+      <p className="hint">Postings rejected by the keyword filter or the AI judge.</p>
       <PostingRoster
         items={data?.items ?? []}
         total={counts.filtered}

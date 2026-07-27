@@ -13,10 +13,27 @@ export interface WatchedPage {
   fetch_strategy: string | null;
 }
 
-/** The title-screening profile the judge weighs postings against — every
- * field is optional free text. roles/role_synonyms/title_keywords are
- * LLM-generated (see api.expandProfile); locations/compensation are always
- * entered directly by the user. */
+/** The currencies the compensation range can be expressed in. */
+export const COMP_CURRENCIES = ["USD", "EUR", "GBP", "INR"] as const;
+export type CompCurrency = (typeof COMP_CURRENCIES)[number];
+
+/** Whether a compensation range is stated per year or per month. */
+export const COMP_PERIODS = ["year", "month"] as const;
+export type CompPeriod = (typeof COMP_PERIODS)[number];
+
+/** The profile fields edited as discrete tags, and whose per-value AI/user
+ * provenance is therefore tracked. */
+export const TAGGED_PROFILE_KEYS = ["role_synonyms", "title_keywords"] as const;
+export type TaggedProfileKey = (typeof TAGGED_PROFILE_KEYS)[number];
+
+/** The title-screening profile the judge weighs postings against. Mirrors the
+ * backend's FilterProfile (functions/_shared/types.ts).
+ *
+ * roles/role_synonyms/title_keywords can be LLM-generated (see
+ * api.expandProfile); locations/compensation are always the user's own. The
+ * five string fields are what the judge reads — `locations` and
+ * `compensation` are derived server-side from the structured fields below, so
+ * the UI edits structure and the judge still sees prose. */
 export interface FilterProfile {
   /** The target role, close to the seeker's own words. */
   roles?: string;
@@ -26,14 +43,40 @@ export interface FilterProfile {
    * rejects any posting whose title contains none of these before the AI
    * judge ever runs. */
   title_keywords?: string;
-  /** Location / remote preference. */
+  /** Location / remote preference. Derived from locations_include/exclude. */
   locations?: string;
-  /** Pay expectation. */
+  /** Pay expectation. Derived from the compensation_* fields. */
   compensation?: string;
+
+  /** Places the seeker will work — a posting must state one of them, or state
+   * no location at all, to survive the pre-filter. */
+  locations_include?: string[];
+  /** Places the seeker will not work — stating any of them is an outright
+   * rejection, even when an include entry also matches. */
+  locations_exclude?: string[];
+  /** Floor of the target pay range, raw (e.g. 120000). */
+  compensation_min?: number;
+  /** Ceiling of the target pay range. Never rejects on its own. */
+  compensation_max?: number;
+  compensation_period?: CompPeriod;
+  compensation_currency?: CompCurrency;
+  /** Which values in the tagged fields came from the LLM rather than the
+   * user's own typing — drives tag colouring on the Profile page. */
+  ai_generated?: Partial<Record<TaggedProfileKey, string[]>>;
 }
 
+/** The prose fields — the only ones the judge reads, and the only ones that
+ * hold a plain string. Distinct from `keyof FilterProfile`, which also spans
+ * the structured arrays and numbers the Profile page edits. */
+export type ProfileTextKey =
+  | "roles"
+  | "role_synonyms"
+  | "title_keywords"
+  | "locations"
+  | "compensation";
+
 /** Canonical profile field order, mirrors the backend's FILTER_PROFILE_KEYS. */
-export const FILTER_PROFILE_KEYS: ReadonlyArray<keyof FilterProfile> = [
+export const FILTER_PROFILE_KEYS: ReadonlyArray<ProfileTextKey> = [
   "roles",
   "role_synonyms",
   "title_keywords",

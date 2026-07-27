@@ -20,7 +20,7 @@
 // human-readable summary so every decision is auditable in the UI (and
 // quoted in the Telegram message for matches).
 
-import type { FilterProfile, PostingVerdict, RuntimeConfig } from "./types.ts";
+import type { FilterProfile, PostingVerdict, ProfileTextKey, RuntimeConfig } from "./types.ts";
 import { FILTER_PROFILE_KEYS } from "./types.ts";
 import { llmJson } from "./llm.ts";
 
@@ -34,7 +34,7 @@ export interface ScreenablePosting {
   compensation?: string | null;
 }
 
-const PROFILE_LABELS: Record<keyof FilterProfile, string> = {
+const PROFILE_LABELS: Record<ProfileTextKey, string> = {
   roles: "Target role",
   role_synonyms: "Equivalent titles (treat as the target role)",
   title_keywords: "Core discipline keywords (the actual domain of work)",
@@ -81,9 +81,9 @@ Title scope is a hard boundary: when the profile states a target role, a posting
 
 Discipline check (only when "Core discipline keywords" are given — read them as naming the actual domain of work, not just words to pattern-match): a posting can share a keyword with the target discipline by pure coincidence while doing fundamentally different work — e.g. an "Electrical Designer" or "DFT (Design-For-Test) Engineer" contains "design" but is not UI/UX or product design work. Before treating a title as in scope, check that the underlying work plausibly belongs to the stated domain, not merely that a keyword appears in the title. This is a stricter reading of the title-scope rule above, not a separate pass.
 
-Location / remote: checked only against the posting's location field, never the title. Could the seeker actually work this job given their stated preference? "Remote" with a region restriction only counts if the restriction is compatible. Missing location info is neutral, never disqualifying.
+Location / remote: checked only against the posting's location field, never the title. The preference reads as "Only: <places>. Never: <places>" — places the seeker will and won't work. A deterministic gate has ALREADY rejected the obvious textual violations before you see this posting, so your job is the judgement it can't make: whether a location that passed on wording actually works in practice ("Remote" with a region restriction only counts if the restriction is compatible; "Remote — EMEA" is not workable from a country outside it even though neither list names it). Missing location info is neutral, never disqualifying.
 
-Compensation: checked only when the posting's compensation field states pay — compare against the seeker's stated expectation. A posting with no pay shown is neutral, never disqualifying.
+Compensation: checked only when the posting's compensation field states pay — compare against the seeker's stated range. A deterministic gate has already rejected postings whose stated pay provably tops out below the seeker's floor in the same currency, so what's left for you is the rest: a different currency, an hourly rate, or an equity-heavy figure that reads as below target. A posting with no pay shown is neutral, never disqualifying.
 
 Rules:
 - Missing information is neutral, never disqualifying. Many postings are just a title. Use "mismatch" only when something actively contradicts the profile.
@@ -138,6 +138,18 @@ function normalizeRoleText(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
 }
 
+/** The delimiters a stored profile list may use. The Profile page writes
+ * comma-separated values, but hand-edited and legacy profiles also contain
+ * semicolons and newlines — splitting on comma alone would treat "design;
+ * UI" as one keyword the UI is simultaneously showing as two tags, so the
+ * gate would silently disagree with what the seeker sees. Kept identical to
+ * the web app's splitToTags (web/src/lib/profileTags.ts). */
+const PROFILE_LIST_DELIMITERS = /[,;\n]/;
+
+function profileList(value: string | undefined): string[] {
+  return (value ?? "").split(PROFILE_LIST_DELIMITERS).map(normalizeRoleText).filter((s) => s !== "");
+}
+
 /** A posting with no company, location, or compensation gives the judge
  * almost nothing beyond the bare title to reason from. Confirmed against
  * real production data: Himalayas' RSS-feed fallback (used when its listing
@@ -159,10 +171,7 @@ export function isThinPosting(p: ScreenablePosting): boolean {
  * seniority qualifiers ("Senior UI Engineer") fall out for free since the
  * bare equivalent ("ui engineer") is still a substring. */
 export function titleWithinDeclaredScope(title: string, profile: FilterProfile): boolean {
-  const equivalents = [profile.roles ?? "", profile.role_synonyms ?? ""]
-    .flatMap((v) => v.split(","))
-    .map(normalizeRoleText)
-    .filter((s) => s !== "");
+  const equivalents = [...profileList(profile.roles), ...profileList(profile.role_synonyms)];
   if (equivalents.length === 0) return true; // no declared scope — nothing to check
   const t = normalizeRoleText(title);
   if (t === "") return true;
@@ -181,10 +190,7 @@ export function titleWithinDeclaredScope(title: string, profile: FilterProfile):
  * reliability. Empty title_keywords means the gate is off (unset profiles
  * behave exactly as before this field existed). */
 export function titleMatchesKeywords(title: string, profile: FilterProfile): boolean {
-  const keywords = (profile.title_keywords ?? "")
-    .split(",")
-    .map(normalizeRoleText)
-    .filter((s) => s !== "");
+  const keywords = profileList(profile.title_keywords);
   if (keywords.length === 0) return true; // no keyword gate declared
   const t = normalizeRoleText(title);
   if (t === "") return true;

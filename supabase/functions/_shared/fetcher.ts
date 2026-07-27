@@ -19,15 +19,36 @@
 // Structured ATS adapters (Greenhouse/Lever/Ashby/RSS) live in _shared/ats.ts
 // and are tried first by the caller — they skip this module entirely when
 // they apply, since they're public data APIs, not the rendered page.
+//
+// Anchor tokenization: every hyperlink on the page is rewritten into a
+// numbered citation marker (`[[7]]anchor text[[/7]]`) alongside a table of
+// {id, href, text}. The extraction model (_shared/llm.ts) can then only ever
+// refer to a link by citing one of these ids — never by writing a URL of its
+// own — which is what makes a hallucinated posting link structurally
+// impossible on this path, the same way judge.ts's `[id]` postings already
+// work for the judge's own citations.
 
 const MAX_CONTENT_CHARS = 100_000;
 
 export type FetchStrategy = "direct" | "direct-alt" | "proxy:pure" | "proxy:jina";
 
+/** One real hyperlink found on the fetched page — a closed citation set the
+ * extraction model can index into but never fabricate an entry for. */
+export interface PageLink {
+  /** 1-based, assigned in document order, stable within one fetch. */
+  id: number;
+  /** Absolute, entity-decoded, ORIGINAL CASE — this is what ends up stored. */
+  href: string;
+  /** The anchor's visible text, whitespace-collapsed and capped. */
+  text: string;
+}
+
 export interface FetchResult {
   content: string;
   truncated: boolean;
   strategy: FetchStrategy;
+  /** The citation table for `content`'s `[[id]]` markers — see PageLink. */
+  links: PageLink[];
 }
 
 // Two header profiles for the direct attempt.
@@ -73,20 +94,144 @@ const BLOCK_PAGE_SIGNS = [
   "sorry, you have been blocked",
 ];
 
-function htmlToText(html: string): string {
-  return html
+// A citation marker: `[[7]]` opens link id 7, `[[/7]]` closes it. ASCII and
+// cheap in tokens, and — unlike the old one-sided `[link: href]` marker —
+// paired, so the model (and attachAnchorText below) can see exactly which
+// text an anchor wraps.
+const MAX_ANCHOR_TEXT_CHARS = 160;
+const LINK_TOKEN_RE = /\[\[(\/?)(\d+)\]\]/g;
+
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/gi, "'");
+}
+
+/** Resolve+validate a possibly-relative href found in markup: absolute,
+ * http(s) only (javascript:/mailto:/tel:/data: are all rejected here, so
+ * they never burn a citation id). A fragment-only href (`#`, `#section`) is
+ * rejected too — it resolves to a perfectly valid URL (same page, empty or
+ * non-empty hash) but is never a distinct destination, so treating it as one
+ * would let a "does nothing, just a JS hook" button masquerade as a posting
+ * link. Returns null for anything unusable. */
+function resolveHref(rawHref: string, baseUrl: string): string | null {
+  const decoded = decodeHtmlEntities(rawHref).trim();
+  if (decoded === "" || decoded.startsWith("#")) return null;
+  try {
+    const u = new URL(decoded, baseUrl);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fill in each link's visible text from the (already capped) tokenized text,
+ * in a single linear scan, and drop any link whose markers didn't survive
+ * the 100k-char cap — the model can only cite what it can see, so the table
+ * only ever holds what the model can see.
+ *
+ * An anchor whose closing marker was truncated away (or whose markup was
+ * malformed) still gets a best-effort text: up to MAX_ANCHOR_TEXT_CHARS
+ * after the opener, stopping at the next marker so it can never swallow a
+ * neighboring link's text.
+ */
+function attachAnchorText(text: string, links: PageLink[]): PageLink[] {
+  const byId = new Map(links.map((l) => [l.id, l] as const));
+  const texts = new Map<number, string>();
+  const stack: Array<{ id: number; start: number }> = [];
+  const tokenRe = new RegExp(LINK_TOKEN_RE.source, "g");
+  let match: RegExpExecArray | null;
+  while ((match = tokenRe.exec(text)) !== null) {
+    const isClose = match[1] === "/";
+    const id = Number(match[2]);
+    if (!isClose) {
+      stack.push({ id, start: match.index + match[0].length });
+      continue;
+    }
+    for (let i = stack.length - 1; i >= 0; i--) {
+      if (stack[i].id !== id) continue;
+      if (!texts.has(id)) texts.set(id, text.slice(stack[i].start, match.index));
+      stack.length = i; // pop this entry and anything left open above it
+      break;
+    }
+  }
+  // Anything still open when the scan ends never saw its closing marker.
+  for (const { id, start } of stack) {
+    if (texts.has(id)) continue;
+    const nextMarker = text.indexOf("[[", start);
+    const end = nextMarker === -1 ? text.length : Math.min(nextMarker, start + MAX_ANCHOR_TEXT_CHARS);
+    texts.set(id, text.slice(start, end));
+  }
+
+  const resolved: PageLink[] = [];
+  for (const [id, raw] of texts) {
+    const link = byId.get(id);
+    if (!link) continue;
+    resolved.push({ ...link, text: raw.replace(/\s+/g, " ").trim().slice(0, MAX_ANCHOR_TEXT_CHARS) });
+  }
+  resolved.sort((a, b) => a.id - b.id);
+  return resolved;
+}
+
+function cap(content: string): { content: string; truncated: boolean } {
+  if (content.length <= MAX_CONTENT_CHARS) return { content, truncated: false };
+  return { content: content.slice(0, MAX_CONTENT_CHARS), truncated: true };
+}
+
+/** Repair a link-token half-cut by cap(): a truncation that lands inside a
+ * `[[` or `[[/123` marker must never be readable as a citation. */
+function repairCutTokenEdge(text: string): string {
+  return text.replace(/\[\[\/?\d*$/, "").replace(/\[$/, "");
+}
+
+/**
+ * HTML → flat text, with every anchor rewritten as a numbered citation
+ * marker pair instead of the old one-sided `[link: href]` text marker. See
+ * the module comment above for why this exists.
+ */
+export function htmlToTextWithLinks(html: string, baseUrl: string): { text: string; links: PageLink[]; truncated: boolean } {
+  // Sanitize any pre-existing `[[7]]`-shaped text FIRST — this is what makes
+  // the citation set genuinely closed: page content can never forge a marker
+  // for the model to "cite" as if it were a real link.
+  let working = html
+    .replace(LINK_TOKEN_RE, " ")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    // keep hrefs so the LLM can return posting URLs
-    .replace(/<a\b[^>]*href="([^"]*)"[^>]*>/gi, ' [link: $1] ')
-    .replace(/<a\b[^>]*href='([^']*)'[^>]*>/gi, " [link: $1] ")
-    // Unquoted attribute values are valid HTML5 (e.g. href=/foo/bar) and used
-    // in the wild (confirmed on cryptocurrencyjobs.co, nodesk.co) — without
-    // this, every one of their per-posting links was silently dropped before
-    // the LLM ever saw them, leaving it nothing to extract a URL from.
-    .replace(/<a\b[^>]*href=([^\s"'>]+)[^>]*>/gi, ' [link: $1] ')
+    .replace(/<!--[\s\S]*?-->/g, " ");
+
+  // One combined anchor pass covering all three href-quoting styles in a
+  // single attribute regex (double-quoted, single-quoted, and unquoted —
+  // unquoted values are valid HTML5 and used in the wild, confirmed on
+  // cryptocurrencyjobs.co and nodesk.co). The (?:^|\s) before "href" is what
+  // stops this from matching "data-href="/"x-href=" as if they were the
+  // anchor's real destination, which the old three-regex version did.
+  const links: PageLink[] = [];
+  const openStack: number[] = [];
+  let nextId = 1;
+  const HREF_RE = /(?:^|\s)href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i;
+  working = working.replace(/<a\b([^>]*)>|<\/a\s*>/gi, (whole: string, attrs?: string) => {
+    if (attrs === undefined) {
+      const id = openStack.pop();
+      return id === undefined ? "" : `[[/${id}]]`;
+    }
+    const hrefMatch = attrs.match(HREF_RE);
+    const rawHref = hrefMatch ? hrefMatch[1] ?? hrefMatch[2] ?? hrefMatch[3] : undefined;
+    const href = rawHref ? resolveHref(rawHref, baseUrl) : null;
+    if (!href) return ""; // no usable href — burn no id, drop the tag itself
+    const id = nextId++;
+    openStack.push(id);
+    links.push({ id, href, text: "" });
+    return `[[${id}]]`;
+  });
+
+  let text = working
     .replace(/<(br|\/p|\/div|\/li|\/tr|\/h[1-6])[^>]*>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
@@ -102,11 +247,49 @@ function htmlToText(html: string): string {
     .replace(/(\$?\b\d+)\s+,\s*(\d{3}\b)/g, "$1,$2")
     .replace(/\n\s*\n+/g, "\n")
     .trim();
+
+  const { content: capped, truncated } = cap(text);
+  const finalText = repairCutTokenEdge(capped);
+  return { text: finalText, links: attachAnchorText(finalText, links), truncated };
 }
 
-function cap(content: string): { content: string; truncated: boolean } {
-  if (content.length <= MAX_CONTENT_CHARS) return { content, truncated: false };
-  return { content: content.slice(0, MAX_CONTENT_CHARS), truncated: true };
+/**
+ * Markdown → flat text with the same citation-marker guarantee, for the
+ * reader-proxy strategies (proxy:pure/proxy:jina), which return markdown
+ * rather than HTML. Covers inline links `[text](url "title")`, angle-bracket
+ * destinations `[text](<url>)`, autolinks `<https://...>`, and excludes
+ * image syntax `![alt](src)` from consuming a citation id. Reference-style
+ * links (`[text][ref]`) are not supported — they simply produce no citation
+ * and fall through to title-based matching downstream.
+ */
+export function markdownToTextWithLinks(md: string, baseUrl: string): { text: string; links: PageLink[]; truncated: boolean } {
+  let working = md.replace(LINK_TOKEN_RE, " ");
+  const links: PageLink[] = [];
+  let nextId = 1;
+
+  working = working.replace(
+    /(!?)\[([^\]\n]*)\]\(\s*(?:<([^>]*)>|([^\s)]+))(?:\s+"[^"]*")?\s*\)/g,
+    (whole: string, bang: string, linkText: string, angleHref: string | undefined, plainHref: string | undefined) => {
+      if (bang === "!") return linkText; // image — keep alt text, consume no id
+      const href = resolveHref(angleHref ?? plainHref ?? "", baseUrl);
+      if (!href) return linkText;
+      const id = nextId++;
+      links.push({ id, href, text: "" });
+      return `[[${id}]]${linkText}[[/${id}]]`;
+    },
+  );
+
+  working = working.replace(/<((?:https?:)\/\/[^>\s]+)>/gi, (whole: string, href: string) => {
+    const resolved = resolveHref(href, baseUrl);
+    if (!resolved) return href;
+    const id = nextId++;
+    links.push({ id, href: resolved, text: "" });
+    return `[[${id}]]${href}[[/${id}]]`;
+  });
+
+  const { content: capped, truncated } = cap(working);
+  const finalText = repairCutTokenEdge(capped);
+  return { text: finalText, links: attachAnchorText(finalText, links), truncated };
 }
 
 /** Heuristic: page body so small it's almost certainly an empty JS shell —
@@ -139,25 +322,39 @@ async function fetchDirect(
   url: string,
   headers: Record<string, string>,
   timeoutMs: number,
-): Promise<{ content: string; truncated: boolean }> {
+): Promise<{ content: string; truncated: boolean; links: PageLink[] }> {
   const res = await fetchWithTimeout(url, headers, timeoutMs);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = await res.text();
   const contentType = res.headers.get("content-type") ?? "";
-  const text = contentType.includes("html") ? htmlToText(body) : body.trim();
-  return cap(text);
+  if (contentType.includes("html")) {
+    const { text, links, truncated } = htmlToTextWithLinks(body, url);
+    return { content: text, truncated, links };
+  }
+  const { content, truncated } = cap(body.trim());
+  return { content, truncated, links: [] };
 }
 
-async function fetchViaProxy(proxyUrl: string): Promise<{ content: string; truncated: boolean }> {
-  // Proxies return plain text/markdown already stripped of markup — pass
-  // through as-is (still capped) rather than running the HTML stripper a
-  // second time, which would mangle markdown-style links and headings.
+/** pageUrl is the ORIGINAL page being crawled (not the proxy URL) — hrefs in
+ * the proxy's markdown are relative to the real page, so absolutization must
+ * use that, not pure.md/r.jina.ai's own URL. */
+async function fetchViaProxy(
+  proxyUrl: string,
+  pageUrl: string,
+): Promise<{ content: string; truncated: boolean; links: PageLink[] }> {
   const res = await fetchWithTimeout(proxyUrl, { "Accept": "text/plain,text/markdown,text/html,*/*" }, 20_000);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = (await res.text()).trim();
   const contentType = res.headers.get("content-type") ?? "";
-  const text = contentType.includes("html") ? htmlToText(body) : body;
-  return cap(text);
+  if (contentType.includes("html")) {
+    const { text, links, truncated } = htmlToTextWithLinks(body, pageUrl);
+    return { content: text, truncated, links };
+  }
+  // Proxies return markdown already stripped of HTML markup — extract its
+  // `[text](url)` links into the same citation-marker shape instead of
+  // running the HTML stripper a second time, which would mangle them.
+  const { text, links, truncated } = markdownToTextWithLinks(body, pageUrl);
+  return { content: text, truncated, links };
 }
 
 /**
@@ -169,10 +366,10 @@ export async function fetchPageContent(
   url: string,
   preferredStrategy?: FetchStrategy | null,
 ): Promise<FetchResult> {
-  const attempts: Array<{ name: FetchStrategy; run: () => Promise<{ content: string; truncated: boolean }> }> = [
+  const attempts: Array<{ name: FetchStrategy; run: () => Promise<{ content: string; truncated: boolean; links: PageLink[] }> }> = [
     { name: "direct", run: () => fetchDirect(url, BROWSER_HEADERS, 15_000) },
     { name: "direct-alt", run: () => fetchDirect(url, CRAWLER_HEADERS, 15_000) },
-    ...PROXIES.map((p) => ({ name: p.name, run: () => fetchViaProxy(p.build(url)) })),
+    ...PROXIES.map((p) => ({ name: p.name, run: () => fetchViaProxy(p.build(url), url) })),
   ];
   // Try the strategy that worked last time first, so a healthy page pays
   // for exactly one attempt instead of re-discovering the winner every poll.
@@ -212,7 +409,11 @@ export async function fetchPageContent(
   throw new Error(errors.join(" | "));
 }
 
-export { blockSignature, looksLikeShell };
+// BROWSER_HEADERS and fetchWithTimeout are also reused by _shared/verify.ts's
+// live posting-link check — same header profile and timeout/abort pattern,
+// one direct request rather than the full proxy chain (which would multiply
+// per-posting cost fourfold for no benefit here).
+export { blockSignature, BROWSER_HEADERS, fetchWithTimeout, looksLikeShell };
 
 export async function sha256(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));

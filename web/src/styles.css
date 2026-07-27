@@ -723,6 +723,12 @@ tr.verdict-row td {
   color: #111827;
 }
 
+.job-card-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .job-card-source {
   font-size: 0.76rem;
   font-weight: 500;
@@ -826,6 +832,13 @@ tr.verdict-row td {
   text-overflow: ellipsis;
 }
 
+.job-card-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
 .job-card-view-btn {
   display: inline-flex;
   align-items: center;
@@ -850,6 +863,15 @@ tr.verdict-row td {
   opacity: 0.5;
   cursor: not-allowed;
   pointer-events: none;
+}
+/* A fallback link to the source listing (not the posting's own url) —
+   visually distinguished from a direct/verified link with a dashed border
+   and slightly muted look, so "View Posting" and "Open source listing"
+   never look identical. */
+.job-card-view-btn.indirect {
+  border-style: dashed;
+  color: var(--fg-muted);
+  opacity: 0.85;
 }
 
 .job-card-verdict-drawer {

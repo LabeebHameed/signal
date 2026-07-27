@@ -1,6 +1,15 @@
 export interface ExtractedPosting {
   title: string;
+  /** Untrusted, model-emitted URL — only ever honored by resolvePostingLinks
+   * (_shared/links.ts) when it canonicalizes to a real anchor href from the
+   * same crawl. Prefer link_id: this field exists solely as backward
+   * compatibility for a model that still emits a URL instead of citing one. */
   url?: string;
+  /** Which numbered anchor marker (see _shared/fetcher.ts htmlToTextWithLinks)
+   * the model cited as this posting's own link — an index into that crawl's
+   * PageLink table, never a URL the model authored itself. Structured
+   * (ATS/RSS) sources never set this; they carry a real url directly. */
+  link_id?: number | null;
   company?: string;
   location?: string;
   /** ISO date (YYYY-MM-DD) the job was posted, when the page shows one. */
@@ -9,6 +18,26 @@ export interface ExtractedPosting {
   posted_text?: string;
   /** Pay/compensation as shown on the page, verbatim (e.g. "$150K - $200K"). */
   compensation?: string;
+}
+
+/** How postings.url was obtained — see migration 0019 for the full
+ * rationale. 'unknown' marks every row that predates link provenance and is
+ * never set going forward. */
+export type LinkSource = "unknown" | "platform" | "cited" | "matched" | "none";
+
+/** Outcome of the live per-posting link check — see migration 0019.
+ * 'indeterminate' (a wall/timeout on the JOB SITE) is deliberately distinct
+ * from 'mismatch'/'dead' (positive evidence the LINK itself is wrong) — only
+ * the latter two ever trigger the source-listing fallback in the UI. */
+export type LinkVerification = "unverified" | "verified" | "indeterminate" | "mismatch" | "dead";
+
+/** One entry in postings.link_attempts — the audit trail of every
+ * check/recovery attempt, and the exclusion set recovery reads to avoid
+ * retrying an href already proven wrong. */
+export interface LinkAttempt {
+  url: string;
+  outcome: LinkVerification;
+  at: string;
 }
 
 /**

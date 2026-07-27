@@ -1,4 +1,4 @@
-import type { CompanyDossier, PostingVerdict } from "./types.ts";
+import type { CompanyDossier, LinkVerification, PostingVerdict } from "./types.ts";
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -77,6 +77,12 @@ export interface CompanyInfo {
  * (+ type when researched), location, pay, and a link. The full
  * per-dimension breakdown and company dossier live on the Inbox page —
  * Telegram is just the ping to go look.
+ *
+ * The link line only ever points straight at the posting once its link has
+ * been positively VERIFIED (link_verification, migration 0019) — anything
+ * short of that (never checked, a wall on the site, or proven wrong) links
+ * to the watched source-listing page instead, labelled honestly, so a
+ * Telegram tap never lands somewhere other than what it claims to be.
  */
 export function formatPostingMessage(posting: {
   title: string;
@@ -85,7 +91,9 @@ export function formatPostingMessage(posting: {
   location?: string | null;
   compensation?: string | null;
   filter_verdict?: Pick<PostingVerdict, "summary"> | null;
-}, pageLabel: string, companyInfo?: CompanyInfo | null): string {
+  link_verification?: LinkVerification | null;
+  link_final_url?: string | null;
+}, pageLabel: string, pageUrl: string, companyInfo?: CompanyInfo | null): string {
   const lines: string[] = [];
   lines.push(`\u{1F514}  ${escapeHtml(truncate(posting.title, 300))}`);
   lines.push("");
@@ -103,8 +111,12 @@ export function formatPostingMessage(posting: {
 
   lines.push("");
   const truncatedPageLabel = truncate(pageLabel, 100);
-  if (posting.url) {
-    lines.push(`${escapeHtml(truncatedPageLabel)} - <a href="${escapeAttr(posting.url)}">See Job Post</a>`);
+  const directHref = posting.link_final_url || posting.url;
+  if (posting.link_verification === "verified" && directHref) {
+    lines.push(`${escapeHtml(truncatedPageLabel)} - <a href="${escapeAttr(directHref)}">See Job Post</a>`);
+  } else if (pageUrl) {
+    lines.push("\u{26A0}\u{FE0F}  Couldn't confirm this posting's own link.");
+    lines.push(`${escapeHtml(truncatedPageLabel)} - <a href="${escapeAttr(pageUrl)}">Open source listing</a>`);
   } else if (pageLabel) {
     lines.push(escapeHtml(truncatedPageLabel));
   }

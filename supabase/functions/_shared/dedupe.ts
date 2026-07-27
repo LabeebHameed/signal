@@ -41,8 +41,15 @@ const TRACKING_PARAMS = new Set([
  * fragment, tracking query params, and a trailing slash. Remaining params
  * are sorted so param-order alone never creates a distinct key. Returns
  * null when the URL can't be parsed at all.
+ *
+ * Case is deliberately PRESERVED here (only the scheme/host are lowercased,
+ * which URL does on its own) — this is the value stored and displayed, and
+ * many sites use case-sensitive job slugs/IDs (e.g. Ashby paths like
+ * `/Foo/9aB-CdE`). Lowercasing it would 404 on those hosts, which is exactly
+ * what happened before this split existed. For the dedupe *identity*, which
+ * must be case-insensitive, use dedupeKeyFromUrl() on the result.
  */
-export function normalizeUrl(rawUrl: string, pageUrl: string): string | null {
+export function canonicalUrl(rawUrl: string, pageUrl: string): string | null {
   let url: URL;
   try {
     url = new URL(rawUrl, pageUrl);
@@ -58,13 +65,24 @@ export function normalizeUrl(rawUrl: string, pageUrl: string): string | null {
   kept.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   url.search = "";
   for (const [k, v] of kept) url.searchParams.append(k, v);
-  const href = url.toString().toLowerCase();
-  return href.replace(/\/$/, "");
+  return url.toString().replace(/\/$/, "");
+}
+
+/**
+ * The dedupe identity of a canonical URL: case-folded, because a board that
+ * serves /Jobs/Foo and /jobs/foo is serving one job. Never stored as
+ * postings.url — only canonicalUrl()'s original-case output is.
+ */
+export function dedupeKeyFromUrl(canonical: string): string {
+  return canonical.toLowerCase();
 }
 
 /** Loose text normalization shared by the title/company/location fallback
- * key: lowercase, strip punctuation, collapse whitespace. */
-function normText(s: string): string {
+ * key: lowercase, strip punctuation, collapse whitespace. Exported so
+ * anything computing a title identity elsewhere (poll-pages' rename-merge
+ * repair) uses exactly the same normalization — a Postgres-side equivalent
+ * would diverge from this on accented titles. */
+export function normText(s: string): string {
   return s
     .normalize("NFKC")
     .toLowerCase()
@@ -81,6 +99,16 @@ export interface PostingKeyInput {
 }
 
 /**
+ * The no-URL fallback identity: title+company+location, loosely normalized.
+ * Extracted from dedupeKeyFor so poll-pages' rename-merge repair (matching a
+ * posting whose URL changed against its prior row) can compute the same
+ * value independently, without a URL in hand.
+ */
+export function titleFallbackKey(posting: PostingKeyInput): string {
+  return `t:${normText(posting.title)}|c:${normText(posting.company ?? "")}|l:${normText(posting.location ?? "")}`;
+}
+
+/**
  * Per-source dedupe key (unique within one watched page): the normalized
  * absolute URL when the posting has one — stable across tracking-param
  * rotation, so an ad unit or listing whose click-through link changes every
@@ -89,10 +117,9 @@ export interface PostingKeyInput {
  * render with no href).
  */
 export function dedupeKeyFor(posting: PostingKeyInput, pageUrl: string): { key: string; absoluteUrl: string | null } {
-  const absoluteUrl = posting.url ? normalizeUrl(posting.url, pageUrl) : null;
-  if (absoluteUrl) return { key: absoluteUrl, absoluteUrl };
-  const key = `t:${normText(posting.title)}|c:${normText(posting.company ?? "")}|l:${normText(posting.location ?? "")}`;
-  return { key, absoluteUrl: null };
+  const canonical = posting.url ? canonicalUrl(posting.url, pageUrl) : null;
+  if (canonical) return { key: dedupeKeyFromUrl(canonical), absoluteUrl: canonical };
+  return { key: titleFallbackKey(posting), absoluteUrl: null };
 }
 
 /**

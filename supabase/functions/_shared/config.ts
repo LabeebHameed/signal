@@ -19,6 +19,7 @@ export function resolveConfig(settings: Settings): RuntimeConfig {
     telegramChatId: settings.telegram_chat_id,
     tavilyApiKey: env("TAVILY_API_KEY", settings.tavily_api_key),
     filterProfile: settings.filter_profile ?? {},
+    negativeKeywords: settings.negative_keywords ?? "",
     companyFilterEnabled: settings.company_filter_enabled ?? false,
   };
 }

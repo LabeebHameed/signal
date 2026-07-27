@@ -53,6 +53,10 @@ function useFunnelCounts(): FunnelCounts {
     queryKey: ["postings", "workflow", "count", "keywordFiltered"],
     queryFn: () => api.listPostings({ limit: 1, keywordFiltered: true }),
   });
+  const negativeKeywordFiltered = useQuery({
+    queryKey: ["postings", "workflow", "count", "negativeKeywordFiltered"],
+    queryFn: () => api.listPostings({ limit: 1, negativeKeywordFiltered: true }),
+  });
 
   return {
     total: total.data?.total ?? 0,
@@ -66,6 +70,7 @@ function useFunnelCounts(): FunnelCounts {
     companyWarned: companyWarned.data?.total ?? 0,
     companyPending: companyPending.data?.total ?? 0,
     keywordFiltered: keywordFiltered.data?.total ?? 0,
+    negativeKeywordFiltered: negativeKeywordFiltered.data?.total ?? 0,
   };
 }
 

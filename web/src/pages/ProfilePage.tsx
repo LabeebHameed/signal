@@ -112,6 +112,7 @@ export default function ProfilePage() {
       const updated = await api.saveSettings({
         profile_input: settings.profile_input,
         filter_profile: settings.filter_profile,
+        negative_keywords: settings.negative_keywords,
       });
       setSettings(updated);
       setLoc(parseLocations(updated.filter_profile.locations ?? ""));
@@ -150,6 +151,7 @@ export default function ProfilePage() {
   const roleTitle = settings.filter_profile.roles || "Target Role Unspecified";
   const keywordTags = splitToTags(settings.filter_profile.title_keywords);
   const synonymTags = splitToTags(settings.filter_profile.role_synonyms);
+  const negativeKeywordTags = splitToTags(settings.negative_keywords);
 
   return (
     <div className="page profile-redesign-page">
@@ -211,6 +213,22 @@ export default function ProfilePage() {
             {synonymTags.length > 0 ? (
               <div className="profile-tag-list">
                 {synonymTags.map((tag, idx) => (
+                  <span key={idx} className="profile-tag-pill secondary-pill">
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <span className="profile-empty-text">None specified</span>
+            )}
+          </div>
+
+          {/* Negative Keywords (Hard Exclude) */}
+          <div className="profile-section-group">
+            <h3 className="profile-section-label">Negative Keywords (Excluded)</h3>
+            {negativeKeywordTags.length > 0 ? (
+              <div className="profile-tag-list">
+                {negativeKeywordTags.map((tag, idx) => (
                   <span key={idx} className="profile-tag-pill secondary-pill">
                     {tag}
                   </span>
@@ -397,6 +415,21 @@ export default function ProfilePage() {
               />
               <span className="profile-field-hint">
                 Postings missing all of these keywords are rejected before the AI judge runs.
+              </span>
+            </div>
+
+            <div className="profile-field-group">
+              <label className="profile-field-label">Negative Keywords (Hard Exclude)</label>
+              <textarea
+                className="profile-text-input"
+                value={settings.negative_keywords}
+                onChange={(e) => setSettings({ ...settings, negative_keywords: e.target.value })}
+                rows={3}
+                placeholder={"e.g.\nSenior\nContract\nUnpaid"}
+              />
+              <span className="profile-field-hint">
+                Postings whose title contains any of these words are rejected before the AI judge ever runs — no
+                LLM call, no exceptions. One keyword or phrase per line, case-insensitive.
               </span>
             </div>
 

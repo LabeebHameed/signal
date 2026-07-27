@@ -13,7 +13,8 @@
 //   PUT    /settings              update settings; secret fields only change
 //                                 when sent as non-empty strings. filter_profile
 //                                 is sanitized to the known profile fields (a PUT
-//                                 replaces the whole profile).
+//                                 replaces the whole profile). negative_keywords is
+//                                 a plain string, independent of filter_profile.
 //   POST   /profile/expand        { statement } → { profile }: expand the user's
 //                                 one-sentence "what I'm looking for" into
 //                                 roles/role_synonyms/title_keywords via the LLM.
@@ -28,6 +29,8 @@
 //                                 job from another source — suppressed rather than sent again)
 //                                 &keyword_filtered=true|false (rejected by the deterministic
 //                                 title-keyword gate ahead of the AI judge, vs by the judge itself)
+//                                 &negative_keyword_filtered=true|false (rejected by the seeker's
+//                                 negative-keywords override, ahead of every other gate)
 //                                 → { items, total }
 //                                 (the extra filters are for the Workflow page's per-stage
 //                                 audit rosters — send at most one of status/screened per
@@ -80,6 +83,7 @@ function maskSettings(s: Settings) {
   return {
     profile_input: s.profile_input ?? "",
     filter_profile: s.filter_profile ?? {},
+    negative_keywords: s.negative_keywords ?? "",
     company_filter_enabled: s.company_filter_enabled ?? false,
     telegram_chat_id: s.telegram_chat_id,
     llm_provider: s.llm_provider,
@@ -228,6 +232,7 @@ Deno.serve(async (req: Request) => {
           "llm_model",
           "llm_base_url",
           "profile_input",
+          "negative_keywords",
         ]
       ) {
         if (typeof body[field] === "string") patch[field] = body[field].trim();
@@ -287,11 +292,12 @@ Deno.serve(async (req: Request) => {
       const screened = params.get("screened") === "true";
       const duplicate = params.get("duplicate") === "true";
       const keywordFiltered = params.get("keyword_filtered");
+      const negativeKeywordFiltered = params.get("negative_keyword_filtered");
       const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       let query = db
         .from("postings")
         .select(
-          "id, title, url, company, location, compensation, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_verdict, company_status, company_verdict, duplicate_of, keyword_filtered, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
+          "id, title, url, company, location, compensation, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_verdict, company_status, company_verdict, duplicate_of, keyword_filtered, negative_keyword_filtered, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
           { count: "exact" },
         );
       if (["pending", "matched", "filtered", "skipped"].includes(status)) {
@@ -315,6 +321,8 @@ Deno.serve(async (req: Request) => {
       if (duplicate) query = query.not("duplicate_of", "is", null);
       if (keywordFiltered === "true") query = query.eq("keyword_filtered", true);
       else if (keywordFiltered === "false") query = query.eq("keyword_filtered", false);
+      if (negativeKeywordFiltered === "true") query = query.eq("negative_keyword_filtered", true);
+      else if (negativeKeywordFiltered === "false") query = query.eq("negative_keyword_filtered", false);
       const { data, error, count } = await query
         .order(sort, { ascending, nullsFirst: false })
         .order("id") // deterministic tiebreaker so pages don't overlap

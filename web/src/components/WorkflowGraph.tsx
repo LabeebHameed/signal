@@ -54,6 +54,10 @@ export interface FunnelCounts {
    * ever ran — a subset of `filtered`, broken out so the judge node's own
    * stat only reflects what the judge itself rejected. */
   keywordFiltered: number;
+  /** Rejected by the seeker's negative-keywords override, ahead of every
+   * other gate — a subset of `filtered`, broken out for the same reason as
+   * keywordFiltered. */
+  negativeKeywordFiltered: number;
 }
 
 type NodeColor = "blue" | "amber" | "teal" | "purple" | "gray";
@@ -243,7 +247,9 @@ function buildGraph(
       subtitle: "LLM relevance score",
       badge: "AGENT",
       color: "teal",
-      stat: `${counts.matched} passed · ${counts.filtered - counts.keywordFiltered} failed${counts.pending > 0 ? ` · ${counts.pending} pending` : ""}`,
+      stat: `${counts.matched} passed · ${
+        counts.filtered - counts.keywordFiltered - counts.negativeKeywordFiltered
+      } failed${counts.pending > 0 ? ` · ${counts.pending} pending` : ""}`,
       icon: "judge",
       selected: isSelected("judge"),
     },

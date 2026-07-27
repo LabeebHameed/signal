@@ -115,6 +115,9 @@ export interface Posting {
   /** True when this posting was rejected by the deterministic title-keyword
    * gate ahead of the AI judge, rather than by the judge itself. */
   keyword_filtered: boolean;
+  /** True when this posting was rejected by the seeker's negative-keywords
+   * override, ahead of every other gate. */
+  negative_keyword_filtered: boolean;
   companies: PostingCompany | null;
   watched_pages: { label: string; url: string } | null;
 }
@@ -130,6 +133,11 @@ export interface Settings {
   /** The raw "what are you looking for" statement the profile was generated from. */
   profile_input: string;
   filter_profile: FilterProfile;
+  /** Newline- or comma-separated words/phrases. Absolute pre-judge override,
+   * independent of filter_profile: a posting whose title contains any of
+   * these is rejected before the AI judge (and the title_keywords gate)
+   * ever runs. */
+  negative_keywords: string;
   company_filter_enabled: boolean;
   telegram_chat_id: string;
   llm_provider: string;
@@ -151,6 +159,7 @@ export interface BulkAddResult {
 export interface SettingsUpdate {
   profile_input?: string;
   filter_profile?: FilterProfile;
+  negative_keywords?: string;
   company_filter_enabled?: boolean;
   telegram_chat_id?: string;
   llm_provider?: string;
@@ -231,6 +240,10 @@ export const api = {
        * judge's own rejections", excluding what the keyword gate already
        * caught. */
       keywordFiltered?: boolean;
+      /** Rejected by the seeker's negative-keywords override, ahead of every
+       * other gate (true), or not (false). Combines with status the same way
+       * keywordFiltered does. */
+      negativeKeywordFiltered?: boolean;
     } = {},
   ) => {
     const params = new URLSearchParams({
@@ -247,6 +260,9 @@ export const api = {
     if (opts.screened) params.set("screened", "true");
     if (opts.duplicate) params.set("duplicate", "true");
     if (opts.keywordFiltered !== undefined) params.set("keyword_filtered", String(opts.keywordFiltered));
+    if (opts.negativeKeywordFiltered !== undefined) {
+      params.set("negative_keyword_filtered", String(opts.negativeKeywordFiltered));
+    }
     return request<PostingsPage>(`/postings?${params}`);
   },
   clearPostings: () => request<{ ok: boolean; deleted: number }>("/postings", { method: "DELETE" }),

@@ -177,6 +177,11 @@ export interface Settings {
   /** The raw "what are you looking for" statement the profile was generated from. */
   profile_input: string;
   filter_profile: FilterProfile;
+  /** Newline- or comma-separated words/phrases. Absolute pre-judge override,
+   * independent of filter_profile: a posting whose title contains any of
+   * these is rejected before the AI judge (and the title_keywords gate)
+   * ever runs — see _shared/negativeKeywords.ts. */
+  negative_keywords: string;
   company_filter_enabled: boolean;
   telegram_chat_id: string;
   admin_token: string;
@@ -198,5 +203,6 @@ export interface RuntimeConfig {
   telegramChatId: string;
   tavilyApiKey: string;
   filterProfile: FilterProfile;
+  negativeKeywords: string;
   companyFilterEnabled: boolean;
 }

@@ -38,6 +38,7 @@ import { fetchStructured } from "../_shared/ats.ts";
 import { extractPostings } from "../_shared/llm.ts";
 import { contentKeyFor, dedupeKeyFor } from "../_shared/dedupe.ts";
 import { judgePostings, keywordFilterVerdict, profileHasContent, titleMatchesKeywords } from "../_shared/judge.ts";
+import { matchesNegativeKeyword, negativeKeywordVerdict, parseNegativeKeywords } from "../_shared/negativeKeywords.ts";
 import {
   companyLayerActive,
   dossierIsFresh,
@@ -167,11 +168,16 @@ function routeToNotify(companyName: string | null, layerActive: boolean): {
  * is active); misses are kept with their verdict but stay silent. Nothing is
  * ever deleted — every decision is auditable in the UI.
  *
+ * Negative keywords are an absolute override, checked first and regardless
+ * of filter_mode/profile content: the seeker already made that call
+ * explicit, so it costs no LLM call and can't be second-guessed downstream
+ * (see _shared/negativeKeywords.ts).
+ *
  * A judge failure is returned as an error string and the rows simply stay
  * 'pending', retrying on the next poll run — same contract as notifyPending.
- * With an empty profile, rows pass straight through as 'skipped', which also
- * flushes any backlog left from when the profile had content — though still
- * via the company queue when that's active.
+ * With an empty profile, the remaining rows pass straight through as
+ * 'skipped', which also flushes any backlog left from when the profile had
+ * content — though still via the company queue when that's active.
  */
 async function screenPending(
   db: SupabaseClient,
@@ -189,14 +195,34 @@ async function screenPending(
   if (error) return `load screening queue failed: ${error.message}`;
   if (!rows || rows.length === 0) return null;
 
+  const negKeywords = parseNegativeKeywords(cfg.negativeKeywords);
+  const openRows: typeof rows = [];
+  for (const row of rows) {
+    const kwMatch = matchesNegativeKeyword(row.title, negKeywords);
+    if (!kwMatch) {
+      openRows.push(row);
+      continue;
+    }
+    const { error: negError } = await db.from("postings").update({
+      filter_status: "filtered",
+      filter_verdict: negativeKeywordVerdict(row.title, kwMatch),
+      negative_keyword_filtered: true,
+      pending_notify: false,
+    }).eq("id", row.id);
+    if (negError) return `save negative-keyword verdict failed: ${negError.message}`;
+    result.screened++;
+    result.filteredOut++;
+  }
+  if (openRows.length === 0) return null;
+
   const layerActive = companyLayerActive(cfg);
   // Only worth a query when a nameless row could still be researched.
-  const fallback = layerActive && rows.some((r) => !r.company)
+  const fallback = layerActive && openRows.some((r) => !r.company)
     ? await pageCompanyFallback(db, page)
     : null;
 
   if (!profileHasContent(cfg.filterProfile)) {
-    for (const row of rows) {
+    for (const row of openRows) {
       const { error: skipError } = await db
         .from("postings")
         .update({ filter_status: "skipped", ...routeToNotify(row.company ?? fallback, layerActive) })
@@ -211,7 +237,7 @@ async function screenPending(
   // LLM call spent — a hard backstop for cases the judge itself has gotten
   // wrong even with full posting context in hand (see titleMatchesKeywords).
   const forJudge: typeof rows = [];
-  for (const row of rows) {
+  for (const row of openRows) {
     if (titleMatchesKeywords(row.title, cfg.filterProfile)) {
       forJudge.push(row);
       continue;

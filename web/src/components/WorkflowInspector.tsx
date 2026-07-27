@@ -165,18 +165,19 @@ function SourcePanel({ pageId, label, pages }: { pageId: string; label: string; 
 
 function JudgePanel({ counts }: { counts: FunnelCounts }) {
   const [tab, setTab] = useState<"failed" | "passed">("failed");
-  const judgeFailed = counts.filtered - counts.keywordFiltered;
+  const judgeFailed = counts.filtered - counts.keywordFiltered - counts.negativeKeywordFiltered;
   const { data, isLoading } = useQuery({
     queryKey: ["postings", "workflow", "judge", tab],
     queryFn: () =>
       tab === "passed"
         ? api.listPostings({ status: "matched", limit: ROSTER_LIMIT, sort: "first_seen_at", order: "desc" })
-        // keywordFiltered:false excludes postings the keyword gate already
-        // rejected before the judge ever ran on them — this roster is the
-        // judge's own calls only.
+        // keywordFiltered:false / negativeKeywordFiltered:false exclude
+        // postings the deterministic gates already rejected before the
+        // judge ever ran on them — this roster is the judge's own calls only.
         : api.listPostings({
           status: "filtered",
           keywordFiltered: false,
+          negativeKeywordFiltered: false,
           limit: ROSTER_LIMIT,
           sort: "first_seen_at",
           order: "desc",

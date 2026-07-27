@@ -24,14 +24,18 @@ const POSTINGS_SCHEMA = {
         type: "object",
         properties: {
           title: { type: "string" },
-          url: { type: "string" },
+          // A citation into this crawl's numbered link markers — never a URL
+          // the model writes itself. See SYSTEM_PROMPT below and
+          // resolvePostingLinks in _shared/links.ts, which is the only place
+          // an id ever gets turned into an actual href.
+          link_id: { type: ["integer", "null"] },
           company: { type: "string" },
           location: { type: "string" },
           posted_at: { type: "string" },
           posted_text: { type: "string" },
           compensation: { type: "string" },
         },
-        required: ["title"],
+        required: ["title", "link_id"],
         additionalProperties: false,
       },
     },
@@ -42,9 +46,11 @@ const POSTINGS_SCHEMA = {
 
 const SYSTEM_PROMPT = `You extract job postings from the text content of a careers / job-listing web page.
 
+Every hyperlink in the content is wrapped in a pair of numbered markers, like this: [[7]]Senior Product Designer[[/7]]. The number is that link's id.
+
 Return every individual job posting visible in the content. For each posting include:
 - title (required): the job title exactly as shown
-- url: the posting's link if one appears near it (may be relative)
+- link_id: the id of the marker wrapping THIS posting's own title or its apply/view link — copy the number exactly as shown between the [[ ]] brackets. Set it to null if no marker wraps this posting. Never invent a number that doesn't appear in the content, and never write a URL — any link you write yourself instead of citing a marker's id is discarded, because it cannot be trusted to actually point at this posting.
 - company: the hiring company if identifiable
 - location: the location(s) shown for the posting, verbatim. Include work arrangement (Remote, Hybrid, On-site) here when shown — these describe where the work happens, not pay.
 - posted_text: if the page shows when the job was posted (e.g. "2 days ago", "Posted Mar 3", "3h"), that text verbatim
@@ -53,9 +59,9 @@ Return every individual job posting visible in the content. For each posting inc
 
 Do NOT filter, judge, or deduplicate beyond obvious exact repeats. Do NOT invent postings or fields that are not in the content. Navigation links, department headers, and generic buttons are not postings.
 
-Sponsored/ad units are not postings either — skip them even when they're styled like a listing. Tells: a link path containing "/ads/", "/sponsored/", "/promo/", or "click"-tracking segments (e.g. "/listing_ads/13/click"); ad-copy phrasing instead of a real job title ("Remote Tech Jobs Paying $130k to $250k", "Post a job", "Hire remotely"); no identifiable single employer. A genuine posting names one specific role at one specific (or "confidential"/"stealth") employer.
+Sponsored/ad units are not postings either — skip them even when they're styled like a listing. Tells: a link path containing "/ads/", "/sponsored/", "/promo/", or "click"-tracking segments (e.g. "/listing_ads/13/click"); ad-copy phrasing instead of a real job title ("Remote Tech Jobs Paying $130k to $250k", "Post a job", "Hire remotely"); no identifiable single employer. A genuine posting names one specific role at one specific (or "confidential"/"stealth") employer. The same tells apply to which marker you cite as link_id — an ad unit's own link is never a posting's link_id.
 
-Respond with JSON only, matching: {"postings": [{"title": "...", "url": "...", "company": "...", "location": "...", "posted_at": "...", "posted_text": "...", "compensation": "..."}]}
+Respond with JSON only, matching: {"postings": [{"title": "...", "link_id": 7, "company": "...", "location": "...", "posted_at": "...", "posted_text": "...", "compensation": "..."}]}
 If the content contains no job postings, respond with {"postings": []}.`;
 
 interface LlmConfig {
@@ -133,7 +139,7 @@ const MAX_TITLE_CHARS = 300;
 
 /** Real compensation always contains at least one digit or currency symbol,
  * and isn't malformed (e.g. ",000 - ,000" from a number split by HTML-tag
- * stripping — see htmlToText's rejoin regex in fetcher.ts, which prevents
+ * stripping — see htmlToTextWithLinks's rejoin regex in fetcher.ts, which prevents
  * most of these but not ones the LLM introduces itself). Employment types
  * ("Full Time"), work arrangements ("Remote"), and other non-pay metadata
  * the model sometimes misassigns here are rejected. */
@@ -159,8 +165,23 @@ function validatePostings(parsed: unknown): ExtractedPosting[] {
       : undefined;
     const location = typeof p.location === "string" ? p.location.trim() : "";
     const compensation = typeof p.compensation === "string" ? p.compensation.trim() : "";
+    // link_id must be a non-negative integer citation — anything else (a
+    // float, a negative number, an out-of-range id) is as good as no
+    // citation at all. Range-checking against the actual link table happens
+    // downstream in resolvePostingLinks (_shared/links.ts), which is the
+    // only place that has the table; an id that turns out not to exist
+    // there is treated exactly like "no citation", never as a URL to trust.
+    const linkId = typeof p.link_id === "number" && Number.isInteger(p.link_id) && p.link_id >= 0
+      ? p.link_id
+      : undefined;
     out.push({
       title: p.title.trim().slice(0, MAX_TITLE_CHARS),
+      link_id: linkId,
+      // Not part of the schema — some providers ignore json_schema entirely
+      // under the "none"-format fallback in callOpenAiCompatible and a model
+      // may still emit a url out of habit. Kept only as raw, UNTRUSTED input:
+      // resolvePostingLinks honors it solely when it matches a real anchor
+      // href from this same crawl, exactly like link_id.
       url: typeof p.url === "string" && p.url.trim() !== "" ? p.url.trim() : undefined,
       company: typeof p.company === "string" && p.company.trim() !== "" ? p.company.trim() : undefined,
       location: location !== "" && location.length <= MAX_LOCATION_CHARS ? location : undefined,

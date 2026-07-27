@@ -7,6 +7,7 @@ import { PostingVerdictDetail } from "../components/PostingVerdictDetail";
 import { PostingStatusPill, VerdictPill } from "../components/PostingStatus";
 import { StatusPill } from "../components/StatusPill";
 import { timeAgo } from "../lib/format";
+import { resolvePostingLink } from "../lib/parsePosting";
 
 const PAGE_SIZE = 50;
 
@@ -98,16 +99,23 @@ export default function Postings() {
             </tr>
           </thead>
           <tbody>
-            {items.map((p) => (
+            {items.map((p) => {
+              const link = resolvePostingLink(p);
+              return (
               <Fragment key={p.id}>
                 <tr className="expandable" onClick={() => setExpanded(expanded === p.id ? null : p.id)}>
                   <td>
-                    {p.url ? (
-                      <a href={p.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                    {link.isDirect && link.href ? (
+                      <a href={link.href} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
                         {p.title}
                       </a>
                     ) : (
                       p.title
+                    )}
+                    {link.badge && (
+                      <StatusPill tone="pending" title={link.tooltip ?? undefined}>
+                        {link.badge}
+                      </StatusPill>
                     )}
                     {p.duplicate_of && (
                       <StatusPill tone="muted" title="A matching posting from another source was already notified">
@@ -135,7 +143,8 @@ export default function Postings() {
                   </tr>
                 )}
               </Fragment>
-            ))}
+              );
+            })}
             {items.length === 0 && !isLoading && (
               <tr>
                 <td colSpan={6} className="empty">

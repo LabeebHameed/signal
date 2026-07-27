@@ -24,13 +24,20 @@ export function isBlockedSourceError(lastError: string | null): boolean {
 }
 
 /**
- * Whether a source's last_error is the "most postings came back with no
- * direct link" advisory rather than a genuine fault — the crawl itself
- * worked, but this page's markup style is one the link extractor doesn't
- * handle well (e.g. an unusual way of embedding an anchor's href), so the
- * per-posting link may be missing or unreliable. Matches the message
- * poll-pages writes (LOW_LINK_QUALITY_PREFIX) — keep the two in sync.
+ * Whether a source's last_error is one of the two link-reliability
+ * advisories rather than a genuine fault — the crawl itself worked, but
+ * either the extractor can't find per-posting links on this page's markup
+ * (LOW_LINK_QUALITY_PREFIX, missing links) or the links it does find keep
+ * failing live verification (LOW_LINK_TRUST_PREFIX, wrong links). Both
+ * render as the same "links unreliable" pill on the Sources page — the
+ * distinction only matters for the tooltip text, not the pill itself.
+ * Matches the messages poll-pages writes — keep the two in sync.
  */
+const LINK_WARNING_PREFIXES = [
+  "Most postings on this crawl have no direct link",
+  "Many verified links on this source turned out wrong",
+];
+
 export function isLinkQualityWarning(lastError: string | null): boolean {
-  return lastError?.startsWith("Most postings on this crawl have no direct link") ?? false;
+  return LINK_WARNING_PREFIXES.some((prefix) => lastError?.startsWith(prefix) ?? false);
 }

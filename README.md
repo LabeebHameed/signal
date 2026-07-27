@@ -52,27 +52,40 @@ pg_cron (every 15 min)
              no LLM; otherwise generic fetch chain (browser headers → crawler UA →
              free keyless reader proxy), each attempt screened for block/challenge pages
           2. hash content → skip extraction if unchanged; still flushes any backlog left
-             by earlier judge/company/Telegram failures
-          3. LLM extracts postings as JSON (structured-source path skips this)
-          4. diff by normalized dedupe key (tracking params stripped, so a rotating
-             click-token doesn't look like a new posting every poll) against `postings`
-          5. deterministic title-keyword gate first (a title sharing none of the profile's
+             by earlier judge/company/Telegram/link-verification failures
+          3. LLM extracts postings as JSON (structured-source path skips this) — every
+             hyperlink on the page is rewritten into a numbered citation marker first, so
+             the model can only CITE a real link it can see, never author a URL of its own
+          4. resolve each posting's link deterministically (no network): the model's
+             citation, or a raw URL it wrote matched back against a real link, or a
+             title-vs-anchor-text fallback match — never trusted as-is
+          5. diff by normalized dedupe key (tracking params stripped, so a rotating
+             click-token doesn't look like a new posting every poll) against `postings`;
+             re-crawl healing repairs a stored link's casing/provenance and merges a
+             posting whose URL changed shape into its prior row, instead of re-notifying it
+          6. deterministic title-keyword gate first (a title sharing none of the profile's
              declared title keywords is rejected outright, no LLM call spent), then the
              LLM judge screens the rest by title (plus location/compensation metadata)
              against your job profile, one batched call per page → verdict + one-line
              reason per posting; a thin-posting backstop catches sources that hand the
              judge almost nothing but a bare title
-               matched  → company layer (if enabled), then queued for Telegram
+               matched  → link verification, then company layer (if enabled), then Telegram
                filtered → kept in the UI with its verdict, never notified
-          6. company layer (optional): research each match's company (Tavily search
+          7. link verification (matched postings only): a live fetch confirms the
+             resolved link really is this posting; a link proven wrong (not just
+             blocked/walled) gets one recovery attempt against this same crawl's data
+             before falling back to linking the source listing page instead
+          8. company layer (optional): research each match's company (Tavily search
              + LLM dossier, cached 30 days) → ok, or warn with a caution — never blocked
-          7. cross-source dedup: a job already notified recently under a different watched
+          9. cross-source dedup: a job already notified recently under a different watched
              page (same normalized title+company) is linked as a duplicate, not re-sent
-          8. matched rows → one short Telegram message each: title, one-line reason,
-             company (+ type when researched), location, pay, link — the full judge
-             reasoning and company dossier live on the Inbox page, not in the message itself
-             (the first-ever crawl of a page is a silent baseline — no notification flood)
-          9. persist state: update last content hash, check error, and failure count
+          10. matched rows → one short Telegram message each: title, one-line reason,
+              company (+ type when researched), location, pay, link — a link only ever
+              points straight at the posting once verified, otherwise the message links
+              the source listing instead; the full judge reasoning and company dossier
+              live on the Inbox page, not in the message itself (the first-ever crawl of
+              a page is a silent baseline — no notification flood)
+          11. persist state: update last content hash, check error, and failure count
 
 web UI (Vite + React, static)
   └─> Edge Function: api   (all requests carry the x-admin-token header)
@@ -243,6 +256,49 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   ⚠ suspicious), the dossier, and source links. This is where the full
   reasoning lives — Telegram is just the ping to go look.
 
+## How link trust works
+
+Every posting carries a link, and that link has to be provably the exact
+posting shown — not a different job, not some other link off the page, and
+never something the model made up.
+
+- **The model cites, it never authors.** On the generic fetch+LLM path, every
+  hyperlink on the page is rewritten into a numbered citation marker
+  (`[[7]]Senior Designer[[/7]]`) before extraction, and the extraction schema
+  asks for a link **id**, not a URL — so a hallucinated link is structurally
+  impossible, not just unlikely. A URL the model writes anyway is only ever
+  honored when it matches a real link already on the page; anything else is
+  discarded. Known ATS platforms and RSS feeds (Greenhouse, Lever, Ashby,
+  Himalayas) skip this entirely — those links come straight from the
+  platform's own data, never through an LLM.
+- **Deterministic reconciliation, no network.** The cited link is checked
+  against unambiguous non-posting shapes (an ad/tracking wrapper, a bare
+  company/category index page, a login/marketing page, the listing page
+  itself) and, when two postings somehow cite the same link, resolved by
+  which one's title actually matches that link's text. Nothing here ever
+  guesses a URL — recovery only ever picks from links that really exist on
+  the page.
+- **Live verification, matched postings only.** Once the job judge marks a
+  posting a match, its link gets a real HTTP check confirming the posting's
+  own title is actually on that page. A wall or timeout on the job site
+  (403, anti-bot challenge, 5xx) is never treated as evidence the link is
+  wrong — only a dead page (404/410) or a page that loads fine but isn't
+  this posting counts as proof.
+- **A proven-wrong link gets one recovery attempt** — re-matching the title
+  against this same crawl's own links (no second fetch, no guessing at URL
+  patterns, no site search) — before falling back.
+- **Never a wrong link, never a dead end.** A link that's still unconfirmed
+  (never checked yet, or the site walled the check) still shows as **View
+  Posting** with a small "link unconfirmed" badge — it was never proven
+  wrong, so it isn't hidden. A link **proven** wrong instead shows **Open
+  source listing**, pointing at the watched page the posting came from, so
+  you always land somewhere real. Telegram is stricter: it only ever links
+  straight to the posting once verified, and links the source listing
+  otherwise — there's no room for a badge in a one-shot message.
+- **Existing postings from before this existed** are marked unverified and
+  are never swept into a bulk re-check — they heal the next time their page
+  is naturally re-crawled.
+
 ## Behavior notes
 
 - **First crawl of a page is a baseline**: postings are recorded but not
@@ -271,17 +327,42 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
 ```
 supabase/
   migrations/                       # schema: tables + RLS, pg_cron job, notify queue,
-                                    # filter layer, dedup, fetch strategy, company layer
+                                    # filter layer, dedup, fetch strategy, company layer,
+                                    # link provenance + verification
   functions/
-    poll-pages/index.ts             # the poller (fetch → extract → dedupe → keyword gate →
-                                    # judge → company → notify)
+    poll-pages/index.ts             # the poller (fetch → extract → resolve links → dedupe →
+                                    # keyword gate → judge → verify links → company → notify)
     api/index.ts                    # CRUD for the UI
-    _shared/                        # fetcher (+ proxy fallback), ats (Greenhouse/Lever/
-                                    # Ashby/RSS), dedupe, LLM adapters, judge, profile
+    _shared/                        # fetcher (+ proxy fallback, anchor citation markers),
+                                    # ats (Greenhouse/Lever/Ashby/RSS), links (deterministic
+                                    # link resolution + re-crawl healing), verify (live link
+                                    # verification), dedupe, LLM adapters, judge, profile
                                     # expansion, company research, telegram, types
+    _shared/*_test.ts                # Deno.test unit tests — see Development below
 web/                                # React UI: Dashboard, Inbox, Workflow, Sources,
                                     # Postings, Profile, Settings (vercel.json included)
 ```
+
+## Development
+
+Backend unit tests are plain `Deno.test` files next to the code they cover
+(`supabase/functions/_shared/*_test.ts`) — no test framework, no mocks, no
+network calls. Run them with the [Deno CLI](https://deno.com):
+
+```sh
+deno test supabase/functions/_shared/          # every backend unit test
+deno test supabase/functions/_shared/links_test.ts   # a single file
+```
+
+Frontend typecheck + build: `cd web && npm run build` (`tsc && vite build`).
+There's no CI configured — run both locally before pushing.
+
+**Deploy note:** the anchor-citation change to how pages are converted to
+text means every watched page's content hash changes once, so the first poll
+after deploying it re-extracts every page in one run — expected, and it's
+what applies the fix. Postings whose link only changed shape (not their
+identity) are merged into their existing row rather than re-notified; see
+"How link trust works" above.
 
 ## Out of scope (future phases)
 

@@ -7,10 +7,28 @@ export interface ParsedJobDetails {
   companyName: string;
   sourceSiteName: string;
   websiteDomain: string | null;
-  postingUrl: string | null;
+  link: PostingLink;
   locationText: string;
   compensationText: string;
   timeText: string;
+}
+
+/**
+ * What a posting's link control should actually do — a single decision so
+ * every render site (JobCard, Postings, Dashboard, and formatPostingMessage
+ * on the backend) treats an unverified/wrong link the same way.
+ *
+ * `isDirect: true` means `href` is the posting's OWN link and is safe to use
+ * as the clickable title too. `isDirect: false` means `href` (when present)
+ * is the WATCHED SOURCE LISTING page, not this specific posting — an
+ * honest fallback, never presented as if it were the posting itself.
+ */
+export interface PostingLink {
+  href: string | null;
+  isDirect: boolean;
+  label: string;
+  badge: string | null;
+  tooltip: string | null;
 }
 
 const AGGREGATOR_DOMAINS = new Set([
@@ -99,10 +117,14 @@ export function cleanPostedTime(postedText: string | null | undefined, firstSeen
 }
 
 /**
- * Resolves job posting URL strictly for the specific posting.
- * Does NOT fall back to generic company homepages or career index URLs if posting.url is absent.
+ * Resolves the posting's own stored URL strictly for that specific posting.
+ * Does NOT fall back to generic company homepages or career index URLs if
+ * posting.url is absent — the backend now stores an absolute, canonical URL
+ * for every posting it can (see supabase/functions/_shared/dedupe.ts
+ * canonicalUrl), so the relative-resolution branch here only matters for
+ * legacy rows written before that was true.
  */
-export function resolvePostingUrl(posting: Posting): string | null {
+function resolveDirectUrl(posting: Posting): string | null {
   const rawUrl = posting.url?.trim();
   const pageUrl = posting.watched_pages?.url?.trim();
 
@@ -112,7 +134,7 @@ export function resolvePostingUrl(posting: Posting): string | null {
     return rawUrl;
   }
 
-  // Relative link resolution against page URL
+  // Relative link resolution against page URL — a legacy-row safety net.
   if (pageUrl && (pageUrl.startsWith("http://") || pageUrl.startsWith("https://"))) {
     try {
       return new URL(rawUrl, pageUrl).href;
@@ -122,6 +144,69 @@ export function resolvePostingUrl(posting: Posting): string | null {
   }
 
   return rawUrl.startsWith("/") || rawUrl.startsWith("http") ? rawUrl : null;
+}
+
+const LINK_UNCONFIRMED_BADGE = "link unconfirmed";
+
+/**
+ * The single place that decides what a posting's link control actually
+ * does. A posting's own link is only ever presented as "View Posting" once
+ * it's been positively verified (see postings.link_verification, migration
+ * 0019) — anything not proven wrong still gets shown (an anti-bot wall on
+ * the job site is not evidence the link is wrong), but flagged with a
+ * visible badge; anything PROVEN wrong (link_verification 'mismatch' or
+ * 'dead') falls back to the watched source-listing page instead, clearly
+ * labelled, rather than ever risking a confidently wrong "View Posting".
+ */
+export function resolvePostingLink(posting: Posting): PostingLink {
+  const directHref = resolveDirectUrl(posting);
+  const sourceHref = posting.watched_pages?.url?.trim() || null;
+
+  const disabled: PostingLink = { href: null, isDirect: false, label: "View Posting", badge: null, tooltip: null };
+  const openSourceListing = (badge: string, tooltip: string): PostingLink =>
+    sourceHref ? { href: sourceHref, isDirect: false, label: "Open source listing", badge, tooltip } : disabled;
+
+  if (directHref && posting.link_verification === "verified") {
+    return {
+      href: posting.link_final_url?.trim() || directHref,
+      isDirect: true,
+      label: "View Posting",
+      badge: null,
+      tooltip: null,
+    };
+  }
+
+  if (posting.link_verification === "dead") {
+    return openSourceListing(
+      "link expired",
+      "This posting's own link no longer resolves — it may have been filled. This opens the page it was found on.",
+    );
+  }
+
+  if (posting.link_verification === "mismatch") {
+    return openSourceListing(
+      LINK_UNCONFIRMED_BADGE,
+      "We couldn't confirm this posting's own link, so this opens the page it was found on.",
+    );
+  }
+
+  // 'unverified' / 'indeterminate' / legacy 'unknown': never PROVEN wrong,
+  // so the direct link is still shown — just flagged, not hidden.
+  if (directHref) {
+    return {
+      href: directHref,
+      isDirect: true,
+      label: "View Posting",
+      badge: LINK_UNCONFIRMED_BADGE,
+      tooltip: "We haven't verified this link resolves to the exact posting yet.",
+    };
+  }
+
+  // No direct URL at all (link_source 'none', or a row predating it).
+  return openSourceListing(
+    LINK_UNCONFIRMED_BADGE,
+    "This source doesn't expose a direct link for this posting — this opens the page it was found on.",
+  );
 }
 
 /**
@@ -346,7 +431,7 @@ export function parseJobDetails(posting: Posting): ParsedJobDetails {
 
   const finalTags = Array.from(new Set(tags)).slice(0, 3);
   const websiteDomain = getCompanyFaviconDomain(posting);
-  const postingUrl = resolvePostingUrl(posting);
+  const link = resolvePostingLink(posting);
   const sourceSiteName = getSourceSiteName(posting, companyName);
   const timeText = cleanPostedTime(posting.posted_text, posting.first_seen_at);
 
@@ -356,7 +441,7 @@ export function parseJobDetails(posting: Posting): ParsedJobDetails {
     companyName,
     sourceSiteName,
     websiteDomain,
-    postingUrl,
+    link,
     locationText,
     compensationText,
     timeText,

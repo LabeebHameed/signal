@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Posting } from "../api";
 import { parseJobDetails } from "../lib/parsePosting";
+import { StatusPill } from "./StatusPill";
 
 interface JobCardProps {
   posting: Posting;
@@ -15,7 +16,7 @@ export function JobCard({ posting }: JobCardProps) {
     companyName,
     sourceSiteName,
     websiteDomain,
-    postingUrl,
+    link,
     locationText,
     compensationText,
     timeText,
@@ -40,7 +41,17 @@ export function JobCard({ posting }: JobCardProps) {
             </span>
           )}
         </div>
-        <span className="job-card-source">{sourceSiteName}</span>
+        <div className="job-card-header-right">
+          <span className="job-card-source">{sourceSiteName}</span>
+          {/* Only ever badges the DIRECT link (never proven wrong, just
+              unconfirmed) — a link that already fell back to the source
+              listing carries its own badge on the button below instead. */}
+          {link.badge && link.isDirect && (
+            <StatusPill tone="pending" title={link.tooltip ?? undefined}>
+              {link.badge}
+            </StatusPill>
+          )}
+        </div>
       </div>
 
       {/* Company Name & Time */}
@@ -49,10 +60,12 @@ export function JobCard({ posting }: JobCardProps) {
         <span className="job-card-time">{timeText}</span>
       </div>
 
-      {/* Clean Job Title */}
+      {/* Clean Job Title — only ever links to the posting's OWN url, never
+          to the source-listing fallback (that would misrepresent the link
+          as this specific posting). */}
       <h3 className="job-card-title">
-        {postingUrl ? (
-          <a href={postingUrl} target="_blank" rel="noreferrer">
+        {link.isDirect && link.href ? (
+          <a href={link.href} target="_blank" rel="noreferrer">
             {cleanTitle}
           </a>
         ) : (
@@ -82,14 +95,15 @@ export function JobCard({ posting }: JobCardProps) {
         </div>
 
         <div className="job-card-footer-right">
-          {postingUrl ? (
+          {link.href ? (
             <a
-              href={postingUrl}
+              href={link.href}
               target="_blank"
               rel="noreferrer"
-              className="job-card-view-btn"
+              className={`job-card-view-btn${link.isDirect ? "" : " indirect"}`}
+              title={link.tooltip ?? undefined}
             >
-              View Posting
+              {link.label}
               <svg
                 width="13"
                 height="13"
@@ -107,7 +121,14 @@ export function JobCard({ posting }: JobCardProps) {
               </svg>
             </a>
           ) : (
-            <span className="job-card-view-btn disabled">View Posting</span>
+            <span className="job-card-view-btn disabled">{link.label}</span>
+          )}
+          {/* A fallback-to-source-listing link carries its own badge here
+              since it has no title-row badge (see the header above). */}
+          {link.badge && !link.isDirect && link.href && (
+            <StatusPill tone="pending" title={link.tooltip ?? undefined}>
+              {link.badge}
+            </StatusPill>
           )}
         </div>
       </div>

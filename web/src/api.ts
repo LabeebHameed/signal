@@ -93,6 +93,16 @@ export interface PostingCompany {
   researched_at: string | null;
 }
 
+/** How postings.url was obtained. 'unknown' marks every row that predates
+ * link provenance (see migration 0019) — never checked, never will be. */
+export type LinkSource = "unknown" | "platform" | "cited" | "matched" | "none";
+
+/** Outcome of the live per-posting link check. 'indeterminate' (a wall/
+ * timeout on the job site) is deliberately distinct from 'mismatch'/'dead'
+ * (positive evidence the link itself is wrong) — only those two ever fall
+ * back to the source listing in the UI; see lib/parsePosting.ts. */
+export type LinkVerification = "unverified" | "verified" | "indeterminate" | "mismatch" | "dead";
+
 export interface Posting {
   id: string;
   title: string;
@@ -118,6 +128,13 @@ export interface Posting {
   /** True when this posting was rejected by the seeker's negative-keywords
    * override, ahead of every other gate. */
   negative_keyword_filtered: boolean;
+  link_source: LinkSource;
+  link_verification: LinkVerification;
+  /** Post-redirect URL, when verification found one different from `url`. */
+  link_final_url: string | null;
+  link_checked_at: string | null;
+  /** One human-readable sentence: why a link is unconfirmed, or how it was recovered. */
+  link_note: string | null;
   companies: PostingCompany | null;
   watched_pages: { label: string; url: string } | null;
 }

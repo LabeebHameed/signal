@@ -5,6 +5,7 @@ import { api } from "../api";
 import { PostingStatusPill } from "../components/PostingStatus";
 import { useToast } from "../components/Toast";
 import { timeAgo } from "../lib/format";
+import { resolvePostingLink } from "../lib/parsePosting";
 
 export default function Dashboard() {
   const queryClient = useQueryClient();
@@ -143,22 +144,29 @@ export default function Dashboard() {
           </Link>
         </div>
         <ul className="activity-list">
-          {recent.map((p) => (
-            <li key={p.id}>
-              <div className="activity-main">
-                <a href={p.url ?? undefined} target="_blank" rel="noreferrer" className="activity-title">
-                  {p.title}
-                </a>
-                <span className="muted">
-                  {p.company ?? "—"} · {p.watched_pages?.label || p.watched_pages?.url}
-                </span>
-              </div>
-              <div className="activity-meta">
-                <span className="muted">{timeAgo(p.first_seen_at)}</span>
-                <PostingStatusPill posting={p} />
-              </div>
-            </li>
-          ))}
+          {recent.map((p) => {
+            const link = resolvePostingLink(p);
+            return (
+              <li key={p.id}>
+                <div className="activity-main">
+                  {link.isDirect && link.href ? (
+                    <a href={link.href} target="_blank" rel="noreferrer" className="activity-title">
+                      {p.title}
+                    </a>
+                  ) : (
+                    <span className="activity-title">{p.title}</span>
+                  )}
+                  <span className="muted">
+                    {p.company ?? "—"} · {p.watched_pages?.label || p.watched_pages?.url}
+                  </span>
+                </div>
+                <div className="activity-meta">
+                  <span className="muted">{timeAgo(p.first_seen_at)}</span>
+                  <PostingStatusPill posting={p} />
+                </div>
+              </li>
+            );
+          })}
           {!loading && recent.length === 0 && <li className="empty">Nothing extracted yet.</li>}
         </ul>
       </section>

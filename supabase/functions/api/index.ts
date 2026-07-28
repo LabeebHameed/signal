@@ -313,10 +313,15 @@ Deno.serve(async (req: Request) => {
           "llm_model",
           "llm_base_url",
           "profile_input",
-          "negative_keywords",
         ]
       ) {
         if (typeof body[field] === "string") patch[field] = body[field].trim();
+      }
+      // Negative keywords are edited as tags like the profile lists, so they
+      // get the same per-value cleaning and de-duplication rather than a bare
+      // trim of the whole string.
+      if (typeof body.negative_keywords === "string") {
+        patch.negative_keywords = sanitizeTagList(body.negative_keywords.split(/[,;\n]/)).join(", ");
       }
       if (typeof body.company_filter_enabled === "boolean") {
         patch.company_filter_enabled = body.company_filter_enabled;

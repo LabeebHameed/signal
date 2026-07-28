@@ -14,6 +14,7 @@ import { formatCompRange, groupDigits, parseAmount } from "../lib/format";
 import {
   aiValuesFor,
   CompPrefs,
+  detectDroppedFields,
   hasAiTags,
   isAiValue,
   joinTags,
@@ -159,7 +160,24 @@ export default function ProfilePage() {
       setLoc(readLocations(updated.filter_profile));
       setComp(readCompensation(updated.filter_profile));
       queryClient.setQueryData(["settings"], updated);
-      toast.show("Profile saved successfully");
+
+      // The PUT returns the saved row, so anything missing from it was
+      // dropped server-side — almost always an API function deployed before
+      // these fields existed. Say so instead of reporting success over the
+      // top of data that silently vanished.
+      const dropped = detectDroppedFields(
+        { profile: filter_profile, negativeKeywords: settings.negative_keywords },
+        { profile: updated.filter_profile, negativeKeywords: updated.negative_keywords ?? "" },
+      );
+      if (dropped.length > 0) {
+        toast.show(
+          `Saved, but the API didn't store your ${dropped.join(", ")} — it's running an older version. ` +
+            "Redeploy the Supabase functions (and apply pending migrations) to fix this.",
+          "error",
+        );
+      } else {
+        toast.show("Profile saved successfully");
+      }
       setIsEditing(false);
     } catch (err) {
       toast.show(err instanceof Error ? err.message : String(err), "error");

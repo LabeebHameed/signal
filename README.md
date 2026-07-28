@@ -134,6 +134,16 @@ update settings set admin_token = '<random string, e.g. openssl rand -hex 24>';
 Everything else (LLM provider/model/key, Telegram bot token + chat ID, optional
 Tavily key) is entered in the web UI → **Settings**.
 
+> **These three commands are not one-time.** The web UI redeploys itself on every
+> push (Vercel), but migrations and Edge Functions only move when you run the CLI.
+> Re-run `db push` and both `functions deploy` commands **after every backend
+> change** — otherwise the frontend silently runs ahead of the backend, and the
+> settings PUT sanitizer quietly discards any field the deployed function predates.
+> **Always `db push` before `functions deploy`**: a function that writes a column
+> its database doesn't have yet makes PostgREST reject the whole UPDATE, so *every*
+> settings save fails, not just the new field. The Profile page now detects this
+> skew after saving and says so, but the fix is always to redeploy.
+
 ### 3. Web UI
 
 Run it locally, or deploy it to Vercel — both read the same `api` function URL.

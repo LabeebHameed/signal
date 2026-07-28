@@ -18,6 +18,7 @@ import {
  * backend's splitters (functions/_shared/judge.ts) — when the two disagree, a
  * value renders as two tags in the UI and gates as one keyword downstream. */
 const TAG_DELIMITERS = /[,;\n]/;
+const TAG_DELIMITERS_GLOBAL = /[,;\n]/g;
 
 export function splitToTags(str?: string): string[] {
   if (!str) return [];
@@ -36,10 +37,13 @@ export function tagKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-/** Strip commas (the commit key) and collapse whitespace. Returns "" for a
- * value that was only punctuation. */
+/** Strip every delimiter and collapse whitespace, so a committed tag can
+ * never contain one. That's what keeps the UI and the backend gates agreeing:
+ * splitToTags splits on [,;\n] while the backend's negative-keyword parser
+ * splits on [\n,], so a tag holding a ";" would render as two tags here and
+ * gate as one there. Returns "" for a value that was only punctuation. */
 export function normalizeTag(value: string): string {
-  return value.replace(/,/g, " ").trim().replace(/\s+/g, " ");
+  return value.replace(TAG_DELIMITERS_GLOBAL, " ").trim().replace(/\s+/g, " ");
 }
 
 export function tagsEqual(a: string[], b: string[]): boolean {
@@ -105,6 +109,36 @@ export function hasAiTags(profile: FilterProfile): boolean {
   });
 }
 
+// ---------- Version-skew detection ----------
+
+/**
+ * Which fields the page sent but the API handed back missing.
+ *
+ * The settings PUT returns the saved row, so anything absent from the
+ * response was silently discarded — the signature of an API function
+ * deployed before these fields existed (its sanitizer keeps only the keys it
+ * knows). Every layer involved swallows this quietly: the sanitizer skips
+ * unknown keys, maskSettings defaults absent columns to "", and the page then
+ * overwrites local state with that response. Without this check the seeker
+ * just watches their input disappear with a success toast on screen.
+ */
+export function detectDroppedFields(
+  sent: { profile: FilterProfile; negativeKeywords: string },
+  received: { profile: FilterProfile; negativeKeywords: string },
+): string[] {
+  const dropped: string[] = [];
+  const lost = (key: keyof FilterProfile) =>
+    sent.profile[key] !== undefined && received.profile[key] === undefined;
+
+  if (lost("locations_include") || lost("locations_exclude")) dropped.push("location filters");
+  if (lost("compensation_min") || lost("compensation_max")) dropped.push("pay range");
+  if (lost("ai_generated")) dropped.push("AI/you tag colours");
+  if (sent.negativeKeywords.trim() !== "" && received.negativeKeywords.trim() === "") {
+    dropped.push("negative keywords");
+  }
+  return dropped;
+}
+
 // ---------- Locations ----------
 
 export interface LocationPrefs {
@@ -120,22 +154,44 @@ export function readLocations(profile: FilterProfile): LocationPrefs {
   if (Array.isArray(include) || Array.isArray(exclude)) {
     return { include: include ?? [], exclude: exclude ?? [] };
   }
-  return { include: parseLegacyLocations(profile.locations), exclude: [] };
+  return parseLegacyLocations(profile.locations);
 }
 
 /**
- * Read a profile saved before include/exclude existed. Those values were one
- * sentence built by the old Work Model radio group — "Remote", "India",
- * "Remote or India" — so the readable pieces become include tags. Anything
- * this doesn't recognize is kept whole as a single tag rather than dropped:
- * a preference the seeker can see and fix beats one that silently vanished.
+ * Recover include/exclude lists from the prose `locations` string alone.
+ *
+ * Two formats reach this. The first is what serializeLocations itself writes
+ * — "Only: Remote, Germany. Never: United States" — which must round-trip:
+ * the prose is the only thing that survives if the structured arrays are ever
+ * lost (an older API that drops unknown keys, a partial restore), and reading
+ * it back as a literal include tag called "Never: United States" turns a
+ * recoverable situation into visible nonsense.
+ *
+ * The second is the pre-tag format built by the old Work Model radio group —
+ * "Remote", "India", "Remote or India" — whose pieces are all includes.
+ *
+ * Anything matching neither is kept whole as a single include tag rather than
+ * dropped: a preference the seeker can see and fix beats one that silently
+ * vanished.
  */
-export function parseLegacyLocations(value?: string): string[] {
+export function parseLegacyLocations(value?: string): LocationPrefs {
   const trimmed = (value ?? "").trim();
-  if (trimmed === "") return [];
+  if (trimmed === "") return { include: [], exclude: [] };
+
+  // Our own output. Either clause may be absent, so match them independently
+  // rather than requiring the full "Only: … . Never: …" shape.
+  const onlyMatch = trimmed.match(/\bonly:\s*([^.]*)/i);
+  const neverMatch = trimmed.match(/\bnever:\s*([^.]*)/i);
+  if (onlyMatch || neverMatch) {
+    return {
+      include: splitToTags(onlyMatch?.[1]),
+      exclude: splitToTags(neverMatch?.[1]),
+    };
+  }
+
   const both = trimmed.match(/^remote or (.+)$/i);
-  if (both) return ["Remote", ...splitToTags(both[1])];
-  return splitToTags(trimmed);
+  if (both) return { include: ["Remote", ...splitToTags(both[1])], exclude: [] };
+  return { include: splitToTags(trimmed), exclude: [] };
 }
 
 /** The prose form the judge reads, e.g. "Only: Remote, Germany. Never:

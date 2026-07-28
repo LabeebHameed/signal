@@ -746,6 +746,29 @@ interface PageContent {
    * link-verification step's recovery (see verifyLinks) so a failed link can
    * be re-derived from this same crawl without a second fetch. */
   links: PageLink[];
+  /** This fetch settled for content carrying no links at all — see
+   * selectAttempt in _shared/fetcher.ts. Drives strategy_probe_after. */
+  degraded: boolean;
+  /** The full strategy re-probe was skipped this poll because the page is
+   * inside its cooldown window, so a degraded result here says nothing new
+   * and must not extend or reset that window. */
+  probeSkipped: boolean;
+}
+
+/** How long a page that ran the whole strategy chain without finding a single
+ * link is excused from doing it again. Long enough that a permanently
+ * link-free page costs one fetch per poll instead of four, short enough that
+ * a site which fixes its markup is picked up the same day. */
+const STRATEGY_PROBE_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+
+/** The next value for watched_pages.strategy_probe_after. */
+function nextProbeAfter(page: WatchedPage, fetched: PageContent): string | null {
+  // Something on this page carried a link — no reason to hold back next time.
+  if (!fetched.degraded) return null;
+  // Degraded, but we didn't actually probe: leave the existing window alone.
+  if (fetched.probeSkipped) return page.strategy_probe_after;
+  // A real, complete probe found nothing better. Don't repeat it for a while.
+  return new Date(Date.now() + STRATEGY_PROBE_COOLDOWN_MS).toISOString();
 }
 
 /** PageLink (fetcher.ts's citation table entry) → LinkCandidate (links.ts's
@@ -765,8 +788,17 @@ async function fetchPageForPolling(page: WatchedPage): Promise<PageContent> {
   const structured = await fetchStructured(page.url, tryRss);
   if (structured) return fromStructured(structured);
 
+  // A page that already ran the full chain and still found nothing with a
+  // link on it is excused from re-probing until its cooldown expires.
+  const probeSkipped = page.strategy_probe_after !== null &&
+    Date.parse(page.strategy_probe_after) > Date.now();
+
   try {
-    const fetched = await fetchPageContent(page.url, page.fetch_strategy as FetchStrategy | null);
+    const fetched = await fetchPageContent(
+      page.url,
+      page.fetch_strategy as FetchStrategy | null,
+      { skipLinkProbe: probeSkipped },
+    );
     return {
       postings: null,
       content: fetched.content,
@@ -774,6 +806,8 @@ async function fetchPageForPolling(page: WatchedPage): Promise<PageContent> {
       strategy: fetched.strategy,
       truncated: fetched.truncated,
       links: fetched.links,
+      degraded: fetched.degraded,
+      probeSkipped,
     };
   } catch (fetchError) {
     // Every fetch strategy failed — most often an anti-bot wall that no
@@ -798,6 +832,10 @@ function fromStructured(structured: { strategy: string; postings: ExtractedPosti
     strategy: structured.strategy,
     truncated: false,
     links: [],
+    // ATS/RSS postings carry real platform URLs, so the link-probe machinery
+    // simply doesn't apply to them.
+    degraded: false,
+    probeSkipped: false,
   };
 }
 
@@ -1017,6 +1055,7 @@ async function pollPage(
       last_error: screenError ?? verifyError ?? companyError ?? notifyError ?? trustWarning ?? preservedWarning,
       failure_count: 0,
       fetch_strategy: fetched.strategy,
+      strategy_probe_after: nextProbeAfter(page, fetched),
       poll_claimed_at: null,
     }).eq("id", page.id);
     result.status = "unchanged";
@@ -1154,6 +1193,7 @@ async function pollPage(
     failure_count: 0,
     first_crawl_done: true,
     fetch_strategy: fetched.strategy,
+    strategy_probe_after: nextProbeAfter(page, fetched),
     poll_claimed_at: null,
   }).eq("id", page.id);
 

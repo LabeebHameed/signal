@@ -185,6 +185,15 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   or sits behind a genuine Cloudflare/DataDome challenge, will still fail
   honestly — nothing keyless beats that. Swap in a URL that serves the
   listing as static HTML or a known ATS/RSS source if one exists.
+- **Postings from one source all show "link unconfirmed" with no link**: the
+  strategy that fetched the page returned readable content but none of the
+  page's links, so there was nothing for the extraction model to cite. Signal
+  now treats a link-free result as a degraded render and keeps trying the
+  other strategies, so this normally corrects itself on the next poll and the
+  source switches strategy (visible on the Sources page). A page that has no
+  links under *any* strategy is left on its best result and excused from
+  re-probing for 12 hours (`watched_pages.strategy_probe_after`) rather than
+  paying for the full chain every poll.
 
 ## How filtering works
 

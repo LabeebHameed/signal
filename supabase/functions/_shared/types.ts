@@ -191,6 +191,11 @@ export interface WatchedPage {
    * FetchStrategy in _shared/fetcher.ts and AtsStrategy in _shared/ats.ts.
    * Tried first on the next poll instead of re-discovering the winner. */
   fetch_strategy: string | null;
+  /** Suppresses the full strategy re-probe until this time. Set only when the
+   * whole chain ran and still found nothing carrying a link, so a page that
+   * genuinely renders without anchors doesn't pay for four fetches every
+   * poll. Cleared as soon as a strategy returns links. */
+  strategy_probe_after: string | null;
   /** Current steady-state check interval in minutes — doubles on repeated
    * unchanged polls (cap 6h), resets to 15 on a real content change. */
   check_interval_minutes: number;

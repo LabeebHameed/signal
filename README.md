@@ -301,9 +301,10 @@ never something the model made up.
   Posting** with a small "link unconfirmed" badge — it was never proven
   wrong, so it isn't hidden. A link **proven** wrong instead shows **Open
   source listing**, pointing at the watched page the posting came from, so
-  you always land somewhere real. Telegram is stricter: it only ever links
-  straight to the posting once verified, and links the source listing
-  otherwise — there's no room for a badge in a one-shot message.
+  you always land somewhere real. Telegram always links straight to the
+  posting (no badge, no source-listing fallback, no "unconfirmed" wording) —
+  verification status only ever changes what's shown on the Inbox/Postings
+  pages.
 - **Existing postings from before this existed** are marked unverified and
   are never swept into a bulk re-check — they heal the next time their page
   is naturally re-crawled.

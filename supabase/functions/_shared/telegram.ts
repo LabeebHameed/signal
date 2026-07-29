@@ -1,4 +1,4 @@
-import type { CompanyDossier, LinkVerification, PostingVerdict } from "./types.ts";
+import type { CompanyDossier, PostingVerdict } from "./types.ts";
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -91,9 +91,8 @@ export function formatPostingMessage(posting: {
   location?: string | null;
   compensation?: string | null;
   filter_verdict?: Pick<PostingVerdict, "summary"> | null;
-  link_verification?: LinkVerification | null;
   link_final_url?: string | null;
-}, pageLabel: string, pageUrl: string, companyInfo?: CompanyInfo | null): string {
+}, pageLabel: string, companyInfo?: CompanyInfo | null): string {
   const lines: string[] = [];
   lines.push(`\u{1F514}  ${escapeHtml(truncate(posting.title, 300))}`);
   lines.push("");
@@ -111,12 +110,9 @@ export function formatPostingMessage(posting: {
 
   lines.push("");
   const truncatedPageLabel = truncate(pageLabel, 100);
-  const directHref = posting.link_final_url || posting.url;
-  if (posting.link_verification === "verified" && directHref) {
-    lines.push(`${escapeHtml(truncatedPageLabel)} - <a href="${escapeAttr(directHref)}">See Job Post</a>`);
-  } else if (pageUrl) {
-    lines.push("\u{26A0}\u{FE0F}  Couldn't confirm this posting's own link.");
-    lines.push(`${escapeHtml(truncatedPageLabel)} - <a href="${escapeAttr(pageUrl)}">Open source listing</a>`);
+  const href = posting.link_final_url || posting.url;
+  if (href) {
+    lines.push(`${escapeHtml(truncatedPageLabel)} - <a href="${escapeAttr(href)}">See Job Post</a>`);
   } else if (pageLabel) {
     lines.push(escapeHtml(truncatedPageLabel));
   }

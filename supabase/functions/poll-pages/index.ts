@@ -527,7 +527,7 @@ async function notifyPending(
   const { data: pending, error } = await db
     .from("postings")
     .select(
-      "id, title, url, company, location, compensation, filter_verdict, content_key, link_verification, link_final_url, companies(display_name, dossier)",
+      "id, title, url, company, location, compensation, filter_verdict, content_key, link_final_url, companies(display_name, dossier)",
     )
     .eq("page_id", page.id)
     .eq("pending_notify", true)
@@ -568,7 +568,7 @@ async function notifyPending(
       await sendTelegramMessageToAll(
         cfg.telegramBotToken,
         chatIds,
-        formatPostingMessage(row, page.label || page.url, page.url, company),
+        formatPostingMessage(row, page.label || page.url, company),
       );
     } catch (e) {
       // Telegram is misconfigured or down — revert the claim so this posting

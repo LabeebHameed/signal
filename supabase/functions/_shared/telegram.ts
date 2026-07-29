@@ -78,11 +78,11 @@ export interface CompanyInfo {
  * per-dimension breakdown and company dossier live on the Inbox page —
  * Telegram is just the ping to go look.
  *
- * The link line only ever points straight at the posting once its link has
- * been positively VERIFIED (link_verification, migration 0019) — anything
- * short of that (never checked, a wall on the site, or proven wrong) links
- * to the watched source-listing page instead, labelled honestly, so a
- * Telegram tap never lands somewhere other than what it claims to be.
+ * The link line always points straight at the posting. Links are read off
+ * the page's own card markup at scrape time (_shared/cards.ts) or come from
+ * an ATS/RSS feed, so there is no "unconfirmed" state to caveat — and the
+ * message format is fixed: no badge, no warning line, no source-listing
+ * fallback. A posting with no link of its own simply shows the source name.
  */
 export function formatPostingMessage(posting: {
   title: string;

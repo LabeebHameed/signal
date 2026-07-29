@@ -189,6 +189,26 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   links under *any* strategy is left on its best result and excused from
   re-probing for 12 hours (`watched_pages.strategy_probe_after`) rather than
   paying for the full chain every poll.
+- **`supabase db push` says "Remote migration versions not found in local
+  migrations directory"**: the listed versions are long timestamps
+  (`20260724134037`) rather than this repo's numbered filenames. That happens
+  when a migration was applied through the Supabase MCP connector (or the
+  dashboard) instead of the CLI — those record a generated timestamp version,
+  so the CLI sees remote history it can't match to a file and refuses to push
+  anything. Fix it by renaming those history rows to the filenames they
+  actually correspond to:
+
+  ```sql
+  select version, name from supabase_migrations.schema_migrations order by version;
+  -- then, for each mismatched row:
+  update supabase_migrations.schema_migrations
+     set version = '0019' where version = '20260728122947';
+  ```
+
+  (`supabase migration repair --status reverted <version>` is the CLI's own
+  route, but it marks the migration un-applied, so only use it when the
+  migration's SQL really hasn't run.) Prefer one tool or the other for
+  migrations — mixing them is what causes this.
 
 ## How filtering works
 
@@ -359,18 +379,33 @@ network calls. Run them with the [Deno CLI](https://deno.com):
 
 ```sh
 deno test supabase/functions/_shared/          # every backend unit test
-deno test supabase/functions/_shared/links_test.ts   # a single file
+deno test supabase/functions/_shared/cards_test.ts   # a single file
 ```
 
 Frontend typecheck + build: `cd web && npm run build` (`tsc && vite build`).
 There's no CI configured — run both locally before pushing.
 
-**Deploy note:** the anchor-citation change to how pages are converted to
-text means every watched page's content hash changes once, so the first poll
-after deploying it re-extracts every page in one run — expected, and it's
-what applies the fix. Postings whose link only changed shape (not their
-identity) are merged into their existing row rather than re-notified; see
-"How link trust works" above.
+**The one external runtime dependency** is
+[`deno_dom`](https://deno.land/x/deno_dom) (the `deno-dom-wasm` build, pinned
+to `v0.1.45`), used to parse a listing page into an element tree. It earns the
+exception: reading a posting's link off its card is entirely a question of
+element structure — which anchor sits inside which repeated container — and the
+regex flattening used everywhere else in this codebase destroys exactly that.
+It is confined to `_shared/dom.ts`, which exposes only what `_shared/cards.ts`
+needs, so it can be swapped for a hand-rolled tokenizer without touching the
+extraction logic. It parses a 200 KB listing page in roughly 110 ms and is
+confirmed working on Supabase's edge runtime.
+
+**Deploy note:** apply migrations **before** deploying the functions —
+0020 adds `watched_pages.strategy_probe_after`, and 0021 drops the old
+verification columns and adds `'card'` to the `link_source` constraint. The new
+code writes both, so deploying it against an un-migrated database fails on the
+constraint. A page whose fetch strategy changes (for example, one that escapes a
+strategy returning no links) produces different page text, so its content hash
+changes once and it re-extracts on the next poll — expected, and it is what
+applies the fix to existing rows. Postings whose link only changed shape (not
+their identity) are merged into their existing row rather than re-notified; see
+"How link accuracy works" above.
 
 ## Out of scope (future phases)
 

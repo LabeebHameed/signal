@@ -112,11 +112,6 @@ export default function Postings() {
                     ) : (
                       p.title
                     )}
-                    {link.badge && (
-                      <StatusPill tone="pending" title={link.tooltip ?? undefined}>
-                        {link.badge}
-                      </StatusPill>
-                    )}
                     {p.duplicate_of && (
                       <StatusPill tone="muted" title="A matching posting from another source was already notified">
                         dup

@@ -20,13 +20,20 @@
 // and are tried first by the caller — they skip this module entirely when
 // they apply, since they're public data APIs, not the rendered page.
 //
-// Anchor tokenization: every hyperlink on the page is rewritten into a
-// numbered citation marker (`[[7]]anchor text[[/7]]`) alongside a table of
-// {id, href, text}. The extraction model (_shared/llm.ts) can then only ever
-// refer to a link by citing one of these ids — never by writing a URL of its
-// own — which is what makes a hallucinated posting link structurally
-// impossible on this path, the same way judge.ts's `[id]` postings already
-// work for the judge's own citations.
+// Two link channels come out of a fetch, in order of authority:
+//
+// 1. `cards` — for HTML bodies, _shared/cards.ts reads each posting's link
+//    straight off the DOM card that displays that posting's title. This is
+//    the authoritative one: it is structural, needs no model judgement, and
+//    costs no extra request.
+// 2. `links` — anchor tokenization. Every hyperlink is rewritten into a
+//    numbered citation marker (`[[7]]anchor text[[/7]]`) alongside a table of
+//    {id, href, text}, so the extraction model can refer to a link only by
+//    citing an id, never by writing a URL of its own. This still carries the
+//    reader-proxy strategies, whose markdown has no DOM and therefore no
+//    cards.
+
+import { type CardLink, extractCardLinks } from "./cards.ts";
 
 const MAX_CONTENT_CHARS = 100_000;
 
@@ -49,6 +56,8 @@ export interface FetchResult {
   strategy: FetchStrategy;
   /** The citation table for `content`'s `[[id]]` markers — see PageLink. */
   links: PageLink[];
+  /** Per-card title→link pairs read from the page's markup — see AttemptOutcome. */
+  cards: CardLink[];
   /** True when the chain settled for a lesser tier — a linkless page or a
    * shell — because nothing better was reachable. poll-pages uses this to
    * throttle how often it re-runs the full strategy probe. */
@@ -313,6 +322,10 @@ export interface AttemptOutcome {
   truncated: boolean;
   links: PageLink[];
   linkBearing: boolean;
+  /** Per-card title→link pairs read from the page's markup (_shared/cards.ts).
+   * The authoritative source for a posting's link. Empty for markdown/plain
+   * bodies, which have no DOM — those fall back to the model's citation. */
+  cards: CardLink[];
 }
 
 /**
@@ -362,10 +375,10 @@ async function fetchDirect(
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("html")) {
     const { text, links, truncated } = htmlToTextWithLinks(body, url);
-    return { content: text, truncated, links, linkBearing: true };
+    return { content: text, truncated, links, linkBearing: true, cards: extractCardLinks(body, url) };
   }
   const { content, truncated } = cap(body.trim());
-  return { content, truncated, links: [], linkBearing: false };
+  return { content, truncated, links: [], linkBearing: false, cards: [] };
 }
 
 /** pageUrl is the ORIGINAL page being crawled (not the proxy URL) — hrefs in
@@ -381,13 +394,15 @@ async function fetchViaProxy(
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("html")) {
     const { text, links, truncated } = htmlToTextWithLinks(body, pageUrl);
-    return { content: text, truncated, links, linkBearing: true };
+    return { content: text, truncated, links, linkBearing: true, cards: extractCardLinks(body, pageUrl) };
   }
   // Proxies return markdown already stripped of HTML markup — extract its
   // `[text](url)` links into the same citation-marker shape instead of
   // running the HTML stripper a second time, which would mangle them.
+  // Markdown carries no DOM, so there are no cards to read — these pages are
+  // exactly why the model's link_id citation is still kept as a fallback.
   const { text, links, truncated } = markdownToTextWithLinks(body, pageUrl);
-  return { content: text, truncated, links, linkBearing: true };
+  return { content: text, truncated, links, linkBearing: true, cards: [] };
 }
 
 /**

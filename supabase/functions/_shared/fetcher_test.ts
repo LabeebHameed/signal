@@ -219,7 +219,7 @@ function outcome(
   links: Array<{ id: number; href: string; text: string }>,
   linkBearing = true,
 ): AttemptOutcome {
-  return { content, truncated: false, links, linkBearing };
+  return { content, truncated: false, links, linkBearing, cards: [] };
 }
 
 const ONE_LINK = [{ id: 1, href: "https://acme.io/jobs/1", text: "Designer" }];

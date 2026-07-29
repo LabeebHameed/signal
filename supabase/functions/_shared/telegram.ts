@@ -91,7 +91,6 @@ export function formatPostingMessage(posting: {
   location?: string | null;
   compensation?: string | null;
   filter_verdict?: Pick<PostingVerdict, "summary"> | null;
-  link_final_url?: string | null;
 }, pageLabel: string, companyInfo?: CompanyInfo | null): string {
   const lines: string[] = [];
   lines.push(`\u{1F514}  ${escapeHtml(truncate(posting.title, 300))}`);
@@ -110,7 +109,7 @@ export function formatPostingMessage(posting: {
 
   lines.push("");
   const truncatedPageLabel = truncate(pageLabel, 100);
-  const href = posting.link_final_url || posting.url;
+  const href = posting.url;
   if (href) {
     lines.push(`${escapeHtml(truncatedPageLabel)} - <a href="${escapeAttr(href)}">See Job Post</a>`);
   } else if (pageLabel) {

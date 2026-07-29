@@ -1,7 +1,6 @@
 import { useState } from "react";
 import type { Posting } from "../api";
 import { parseJobDetails } from "../lib/parsePosting";
-import { StatusPill } from "./StatusPill";
 
 interface JobCardProps {
   posting: Posting;
@@ -43,14 +42,6 @@ export function JobCard({ posting }: JobCardProps) {
         </div>
         <div className="job-card-header-right">
           <span className="job-card-source">{sourceSiteName}</span>
-          {/* Only ever badges the DIRECT link (never proven wrong, just
-              unconfirmed) — a link that already fell back to the source
-              listing carries its own badge on the button below instead. */}
-          {link.badge && link.isDirect && (
-            <StatusPill tone="pending" title={link.tooltip ?? undefined}>
-              {link.badge}
-            </StatusPill>
-          )}
         </div>
       </div>
 
@@ -122,13 +113,6 @@ export function JobCard({ posting }: JobCardProps) {
             </a>
           ) : (
             <span className="job-card-view-btn disabled">{link.label}</span>
-          )}
-          {/* A fallback-to-source-listing link carries its own badge here
-              since it has no title-row badge (see the header above). */}
-          {link.badge && !link.isDirect && link.href && (
-            <StatusPill tone="pending" title={link.tooltip ?? undefined}>
-              {link.badge}
-            </StatusPill>
           )}
         </div>
       </div>

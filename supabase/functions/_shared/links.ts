@@ -1,7 +1,13 @@
 // Deterministic, network-free reconciliation of a posting's link: turns the
-// extraction model's citation (or, for structured ATS/RSS sources, a real
-// platform URL) into a stored `postings.url` plus provenance, with no
-// network calls of its own — that's _shared/verify.ts's job.
+// page's own markup (or, for structured ATS/RSS sources, a real platform URL)
+// into a stored `postings.url` plus provenance.
+//
+// The primary path is _shared/cards.ts: the link belonging to the DOM card
+// that displays this posting's title. Nothing here makes a network request,
+// and nothing is checked after the fact — a link read off the card that
+// contains the title does not need to be re-proven, and trying to prove it
+// could not work anyway (the sites needing proof are exactly the ones that
+// wall or challenge a server-side fetch).
 //
 // Also hosts pickRenameMerges, the pure predicate poll-pages uses to decide
 // whether a posting whose URL changed between crawls should be merged into
@@ -11,6 +17,7 @@
 
 import type { ExtractedPosting, LinkSource } from "./types.ts";
 import type { PageLink } from "./fetcher.ts";
+import { type CardLink, resolveByCard } from "./cards.ts";
 import { canonicalUrl, dedupeKeyFromUrl, normText } from "./dedupe.ts";
 
 export interface LinkCandidate {
@@ -177,25 +184,37 @@ export function bestAnchorForTitle(
  * them link_source='platform' directly since their url is already a real
  * platform-issued link.
  *
- * Order: (1) the model's cited link_id, if usable. (2) back-compat: a raw
- * url the model wrote itself, honored only when it matches a real href from
- * this crawl's link table — anything else is discarded, never trusted.
- * (3) fallback: best anchor-text match for the title. (4) nothing → none.
- * (5) duplicate-href arbitration over the cited/matched results only (never
- * platform, which is unique by construction and where a coincidence is not
+ * Order: (1) the posting's own card link, read from the page's markup — the
+ * authoritative path whenever the page was fetched as HTML. (2) the model's
+ * cited link_id, which only carries reader-proxy (markdown) pages, where
+ * there is no DOM and therefore no cards. (3) back-compat: a raw url the
+ * model wrote itself, honored only when it matches a real href from this
+ * crawl's link table — anything else is discarded, never trusted.
+ * (4) fallback: best anchor-text match for the title. (5) nothing → none.
+ * (6) duplicate-href arbitration over the cited/matched results only (never
+ * platform or card, both unique by construction, where a coincidence is not
  * evidence of a mistake).
  */
 export function resolvePostingLinks(
   postings: ExtractedPosting[],
   links: PageLink[],
   pageUrl: string,
+  cards: CardLink[] = [],
 ): ResolvedLink[] {
   const byId = new Map(links.map((l) => [l.id, l] as const));
   const allCandidates: LinkCandidate[] = links.map((l) => ({ href: l.href, text: l.text }));
   const usableCandidates = allCandidates.filter((c) => isUsableHref(c.href, pageUrl));
+  // cards.ts leaves href screening to this module so its imports stay acyclic.
+  const usableCards = cards.filter((c) => isUsableHref(c.href, pageUrl));
 
   const resolved: ResolvedLink[] = postings.map((p): ResolvedLink => {
-    // 1. Cited id.
+    // 1. The card on the page that displays this posting's title. Structural,
+    // so it outranks anything the model says about links.
+    const card = resolveByCard(p.title, p.company ?? null, usableCards);
+    if (card) {
+      return { url: card.href, source: "card", score: card.score, note: null };
+    }
+    // 2. Cited id.
     if (typeof p.link_id === "number") {
       const link = byId.get(p.link_id);
       if (link && isUsableHref(link.href, pageUrl)) {
@@ -203,7 +222,7 @@ export function resolvePostingLinks(
         return { url: canonical, source: "cited", score: titleAnchorScore(p.title, link.text), note: null };
       }
     }
-    // 2. Back-compat: a raw url from the model, honored only if it
+    // 3. Back-compat: a raw url from the model, honored only if it
     // canonicalizes to a real href from this crawl's link table.
     if (p.url) {
       const rawCanonical = canonicalUrl(p.url, pageUrl);
@@ -223,7 +242,7 @@ export function resolvePostingLinks(
       // it cannot be distinguished from a hallucination, so it's treated as
       // one. Falls through to title-matching below.
     }
-    // 3. Fallback: best anchor-text match for the title.
+    // 4. Fallback: best anchor-text match for the title.
     const best = bestAnchorForTitle(p.title, usableCandidates);
     if (best) {
       const canonical = canonicalUrl(best.href, pageUrl) ?? best.href;
@@ -234,11 +253,11 @@ export function resolvePostingLinks(
         note: "no valid citation; recovered by matching the title against the page's links",
       };
     }
-    // 4. Nothing defensible.
+    // 5. Nothing defensible.
     return { url: null, source: "none", score: null, note: null };
   });
 
-  // 5. Duplicate-href arbitration, cited/matched only: when two postings
+  // 6. Duplicate-href arbitration, cited/matched only: when two postings
   // claim the same href, at most one can be right. The higher-scoring one
   // keeps it; the other(s) retry title-matching with that href excluded.
   const groups = new Map<string, number[]>();

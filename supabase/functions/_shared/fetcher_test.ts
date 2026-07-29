@@ -1,5 +1,12 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { htmlToTextWithLinks, markdownToTextWithLinks } from "./fetcher.ts";
+import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  type AttemptOutcome,
+  type FetchStrategy,
+  htmlToTextWithLinks,
+  markdownToTextWithLinks,
+  selectAttempt,
+  stripReaderFrontmatter,
+} from "./fetcher.ts";
 
 const BASE = "https://acme.io/careers";
 
@@ -196,4 +203,127 @@ Deno.test("markdownToTextWithLinks: reference-style links are an accepted gap â€
 Deno.test("markdownToTextWithLinks: a real URL is preserved even when relative resolution is needed", () => {
   const { links } = markdownToTextWithLinks(`[Designer](jobs/1)`, "https://acme.io/careers/");
   assertEquals(links[0].href, "https://acme.io/careers/jobs/1");
+});
+
+// --- selectAttempt: strategy tiering ----------------------------------------
+//
+// These cover the nodesk.co failure directly: a reader proxy that returns
+// readable content with none of the page's job links must not win over a
+// plain fetch that has them. Attempts are thunks, so the whole decision is
+// exercised with no network at all.
+
+const LONG = "x".repeat(600); // clears the looksLikeShell threshold
+
+function outcome(
+  content: string,
+  links: Array<{ id: number; href: string; text: string }>,
+  linkBearing = true,
+): AttemptOutcome {
+  return { content, truncated: false, links, linkBearing, cards: [] };
+}
+
+const ONE_LINK = [{ id: 1, href: "https://acme.io/jobs/1", text: "Designer" }];
+
+function attempt(name: FetchStrategy, out: AttemptOutcome | Error) {
+  return {
+    name,
+    run: () => (out instanceof Error ? Promise.reject(out) : Promise.resolve(out)),
+  };
+}
+
+Deno.test("selectAttempt: a link-bearing strategy beats an earlier link-free one", async () => {
+  const res = await selectAttempt([
+    attempt("proxy:pure", outcome(LONG, [])),
+    attempt("direct", outcome(LONG, ONE_LINK)),
+  ]);
+  assertEquals(res.strategy, "direct");
+  assertEquals(res.links.length, 1);
+  assertEquals(res.degraded, false);
+});
+
+Deno.test("selectAttempt: stops at the first link-bearing result without running the rest", async () => {
+  let ran = 0;
+  const res = await selectAttempt([
+    { name: "direct", run: () => Promise.resolve(outcome(LONG, ONE_LINK)) },
+    { name: "proxy:pure", run: () => { ran++; return Promise.resolve(outcome(LONG, ONE_LINK)); } },
+  ]);
+  assertEquals(res.strategy, "direct");
+  assertEquals(ran, 0);
+});
+
+Deno.test("selectAttempt: falls back to link-free content when nothing has links", async () => {
+  const res = await selectAttempt([
+    attempt("direct", outcome(LONG, [])),
+    attempt("proxy:pure", outcome(LONG + "yy", [])),
+  ]);
+  // Longest link-free candidate wins, and says so.
+  assertEquals(res.strategy, "proxy:pure");
+  assertEquals(res.degraded, true);
+});
+
+Deno.test("selectAttempt: link-free content outranks a sub-500-char shell", async () => {
+  const res = await selectAttempt([
+    attempt("direct", outcome("tiny", ONE_LINK)),      // shell, despite a link
+    attempt("proxy:pure", outcome(LONG, [])),          // real content, no links
+  ]);
+  assertEquals(res.strategy, "proxy:pure");
+  assertEquals(res.degraded, true);
+});
+
+Deno.test("selectAttempt: plain-text content is not penalised for having no links", async () => {
+  const res = await selectAttempt([
+    attempt("direct", outcome(LONG, [], /* linkBearing */ false)),
+    attempt("proxy:pure", outcome(LONG, ONE_LINK)),
+  ]);
+  // A text/JSON body cannot have anchors, so it is a first-class result.
+  assertEquals(res.strategy, "direct");
+  assertEquals(res.degraded, false);
+});
+
+Deno.test("selectAttempt: a blocked page is never accepted, even as a last resort", async () => {
+  await assertRejects(() =>
+    selectAttempt([attempt("direct", outcome("Just a moment... " + LONG, ONE_LINK))])
+  );
+});
+
+Deno.test("selectAttempt: skipLinkProbe mode takes the first result but still reports it degraded", async () => {
+  let ran = 0;
+  const res = await selectAttempt([
+    { name: "proxy:pure", run: () => Promise.resolve(outcome(LONG, [])) },
+    { name: "direct", run: () => { ran++; return Promise.resolve(outcome(LONG, ONE_LINK)); } },
+  ], { enforceLinks: false });
+  assertEquals(res.strategy, "proxy:pure");
+  assertEquals(ran, 0);          // cooldown honoured: only one fetch
+  assertEquals(res.degraded, true); // but the caller must not reset the window
+});
+
+Deno.test("selectAttempt: every strategy failing surfaces the collected errors", async () => {
+  await assertRejects(
+    () => selectAttempt([attempt("direct", new Error("HTTP 403"))]),
+    Error,
+    "HTTP 403",
+  );
+});
+
+// --- stripReaderFrontmatter -------------------------------------------------
+
+Deno.test("stripReaderFrontmatter: removes a leading reader-proxy fence", () => {
+  const body = "---\nurl: https://contra.com/x\ntitle: Contra\n---\n# Jobs\n\n[Designer](/jobs/1)";
+  assertEquals(stripReaderFrontmatter(body), "# Jobs\n\n[Designer](/jobs/1)");
+});
+
+Deno.test("stripReaderFrontmatter: a body that is only frontmatter reduces to nothing (the contra.com case)", () => {
+  const body = "---\nurl: https://contra.com/independent/opportunities\n" +
+    "title: Contra - A professional network\ndescription: Connect with next-gen talent.\n---";
+  assertEquals(stripReaderFrontmatter(body), "");
+});
+
+Deno.test("stripReaderFrontmatter: a --- rule further down the document is left alone", () => {
+  const body = "# Jobs\n\n---\n\n[Designer](/jobs/1)";
+  assertEquals(stripReaderFrontmatter(body), body);
+});
+
+Deno.test("stripReaderFrontmatter: content without frontmatter is untouched", () => {
+  const body = "# Jobs\n\n[Designer](/jobs/1)";
+  assertEquals(stripReaderFrontmatter(body), body);
 });

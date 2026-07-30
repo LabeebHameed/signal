@@ -27,7 +27,6 @@ import type {
   CompanyRow,
   CompanyVerdict,
   ExtractedPosting,
-  LinkAttempt,
   PostingVerdict,
   RuntimeConfig,
   Settings,
@@ -35,13 +34,13 @@ import type {
 } from "../_shared/types.ts";
 import { resolveConfig } from "../_shared/config.ts";
 import type { FetchStrategy, PageLink } from "../_shared/fetcher.ts";
+import type { CardLink } from "../_shared/cards.ts";
 import { fetchPageContent, sha256 } from "../_shared/fetcher.ts";
 import { fetchStructured } from "../_shared/ats.ts";
 import { extractPostings } from "../_shared/llm.ts";
 import { canonicalUrl, contentKeyFor, dedupeKeyFromUrl, titleFallbackKey } from "../_shared/dedupe.ts";
-import type { ExistingTitleRow, LinkCandidate, RenameCandidateRow, ResolvedLink } from "../_shared/links.ts";
-import { bestAnchorForTitle, isUsableHref, pickRenameMerges, resolvePostingLinks } from "../_shared/links.ts";
-import { verifyPostingLink } from "../_shared/verify.ts";
+import type { ExistingTitleRow, RenameCandidateRow, ResolvedLink } from "../_shared/links.ts";
+import { pickRenameMerges, resolvePostingLinks } from "../_shared/links.ts";
 import { judgePostings, keywordFilterVerdict, profileHasContent, titleMatchesKeywords } from "../_shared/judge.ts";
 import { matchesNegativeKeyword, negativeKeywordVerdict, parseNegativeKeywords } from "../_shared/negativeKeywords.ts";
 import { checkLocation, locationFilterVerdict } from "../_shared/locations.ts";
@@ -105,11 +104,6 @@ const DURABLE_FAILURE_RECHECK_MS = 3 * 60 * 60 * 1000;
 //   - a lifetime attempt cap per posting, after which it settles into
 //     whatever its last outcome was (verified/indeterminate/mismatch/dead)
 //     rather than being retried forever.
-const VERIFY_BATCH = 20;
-const VERIFY_TIMEOUT_MS = 8_000;
-const VERIFY_BUDGET_MS = 30_000;
-const MAX_LINK_ATTEMPTS = 3;
-const LINK_RETRY_MINUTES = 45;
 
 /**
  * A fetch failure that means "this site refuses automated access", as
@@ -145,14 +139,6 @@ const LOW_LINK_QUALITY_PREFIX = "Most postings on this crawl have no direct link
 const LOW_LINK_QUALITY_MIN_ROWS = 3;
 const LOW_LINK_QUALITY_THRESHOLD = 0.5;
 
-// A second, complementary advisory: LOW_LINK_QUALITY_PREFIX above catches a
-// source whose links are MISSING; this one catches a source whose links are
-// PRESENT but keep failing live verification (mismatch/dead) — the two
-// failure modes this whole feature exists to distinguish. Shares its
-// thresholds with the above and the same "links unreliable" pill on the
-// Sources page (see isLinkQualityWarning in web/src/lib/format.ts).
-const LOW_LINK_TRUST_PREFIX = "Many verified links on this source turned out wrong";
-
 interface PageResult {
   url: string;
   status: "ok" | "unchanged" | "error";
@@ -162,9 +148,6 @@ interface PageResult {
   companiesResearched: number;
   companyWarned: number;
   notified: number;
-  linksVerified: number;
-  linksRecovered: number;
-  linksUnconfirmed: number;
   error?: string;
 }
 
@@ -562,7 +545,7 @@ async function notifyPending(
   const { data: pending, error } = await db
     .from("postings")
     .select(
-      "id, title, url, company, location, compensation, filter_verdict, content_key, link_verification, link_final_url, companies(display_name, dossier)",
+      "id, title, url, company, location, compensation, filter_verdict, content_key, companies(display_name, dossier)",
     )
     .eq("page_id", page.id)
     .eq("pending_notify", true)
@@ -603,7 +586,7 @@ async function notifyPending(
       await sendTelegramMessageToAll(
         cfg.telegramBotToken,
         chatIds,
-        formatPostingMessage(row, page.label || page.url, page.url, company),
+        formatPostingMessage(row, page.label || page.url, company),
       );
     } catch (e) {
       // Telegram is misconfigured or down — revert the claim so this posting
@@ -621,149 +604,6 @@ async function notifyPending(
 }
 
 /**
- * Live verification of matched postings' links — the last line of defense
- * against a wrong link ever reaching the user (see _shared/verify.ts for the
- * classification rules). Scoped to filter_status='matched' only: that's
- * exactly the Inbox/Telegram set, so every link the user can actually click
- * gets a real check, while filtered/borderline postings (which the user
- * never sees a link for) spend no network. Structured (ATS/RSS) postings are
- * included too — a real platform URL can still go stale (job filled, listing
- * pulled) between the crawl and the check.
- *
- * Same error-string contract as every other step here: never throws, a
- * failure just means these rows retry on the next poll. Verification never
- * blocks notification — notifyPending sends regardless of link_verification,
- * so a row that ran out of budget simply notifies with whatever it has
- * (rendered as an "unverified" badge rather than a bare "View Posting" — see
- * web/src/lib/parsePosting.ts).
- *
- * Recovery ("go again and find the proper link") fires only when a check
- * comes back with POSITIVE evidence the link is wrong (mismatch/dead) — an
- * indeterminate result (a wall, a timeout) is not grounds to go looking for
- * a different link, since the current one was never disproven. Recovery
- * candidates come from THIS RUN's own crawl data — `crawlCandidates`, either
- * the generic path's citation table or the structured path's own postings —
- * so it costs no second fetch; when the page wasn't actually re-crawled this
- * run (the fetch-failure branch), crawlCandidates is null and recovery is
- * simply skipped, though the primary check still runs and still counts
- * toward the attempt cap.
- */
-async function verifyLinks(
-  db: SupabaseClient,
-  page: WatchedPage,
-  crawlCandidates: LinkCandidate[] | null,
-  result: PageResult,
-): Promise<string | null> {
-  const nowIso = new Date().toISOString();
-  const { data: rows, error } = await db
-    .from("postings")
-    .select("id, title, url, link_final_url, link_source, link_check_attempts, link_attempts")
-    .eq("page_id", page.id)
-    .eq("filter_status", "matched")
-    .in("link_source", ["platform", "cited", "matched"]) // 'unknown'/'none' never queue — see migration 0019
-    .neq("link_verification", "verified")
-    .not("url", "is", null)
-    .lt("link_check_attempts", MAX_LINK_ATTEMPTS)
-    .or(`link_retry_after.is.null,link_retry_after.lte.${nowIso}`)
-    .order("first_seen_at")
-    .limit(VERIFY_BATCH);
-  if (error) return `load link verification queue failed: ${error.message}`;
-  if (!rows || rows.length === 0) return null;
-
-  const usableCandidates = crawlCandidates?.filter((c) => isUsableHref(c.href, page.url)) ?? null;
-  const deadline = Date.now() + VERIFY_BUDGET_MS;
-
-  for (const row of rows) {
-    if (Date.now() > deadline) break; // out of budget this run — remaining rows retry next run
-
-    const targetUrl = (row.link_final_url ?? row.url) as string;
-    const priorAttempts = (row.link_attempts ?? []) as LinkAttempt[];
-    const primaryOutcome = await verifyPostingLink(targetUrl, row.title, VERIFY_TIMEOUT_MS);
-    const attempts: LinkAttempt[] = [
-      ...priorAttempts,
-      { url: targetUrl, outcome: primaryOutcome.verification, at: nowIso },
-    ];
-
-    let finalOutcome = primaryOutcome;
-    let recovered: { url: string; score: number } | null = null;
-    let recoveryNote: string | null = null;
-
-    // Recovery only when this check just PROVED the link wrong, and only
-    // when this run actually has fresh crawl data to draw a candidate from.
-    if ((primaryOutcome.verification === "dead" || primaryOutcome.verification === "mismatch") && usableCandidates) {
-      const excluded = new Set(attempts.map((a) => dedupeKeyFromUrl(a.url)));
-      const candidate = bestAnchorForTitle(row.title, usableCandidates, excluded);
-      if (candidate) {
-        const canonical = canonicalUrl(candidate.href, page.url) ?? candidate.href;
-        const recoveryOutcome = await verifyPostingLink(canonical, row.title, VERIFY_TIMEOUT_MS);
-        attempts.push({ url: canonical, outcome: recoveryOutcome.verification, at: nowIso });
-        if (recoveryOutcome.verification === "verified") {
-          finalOutcome = recoveryOutcome;
-          recovered = { url: canonical, score: candidate.score };
-          recoveryNote = "original link did not resolve to this posting; recovered by matching the title " +
-            "against the page's own links";
-        }
-      }
-    }
-
-    const update: Record<string, unknown> = {
-      link_verification: finalOutcome.verification,
-      link_final_url: finalOutcome.finalUrl,
-      link_checked_at: nowIso,
-      link_check_attempts: row.link_check_attempts + 1,
-      link_retry_after: finalOutcome.verification === "verified"
-        ? null
-        : new Date(Date.now() + LINK_RETRY_MINUTES * 60_000).toISOString(),
-      link_note: recoveryNote ?? finalOutcome.note,
-      link_attempts: attempts,
-    };
-    if (recovered) {
-      update.url = recovered.url;
-      update.link_source = "matched";
-      update.link_score = recovered.score;
-    }
-
-    const { error: updateError } = await db.from("postings").update(update).eq("id", row.id);
-    if (updateError) return `save link verification failed: ${updateError.message}`;
-
-    if (finalOutcome.verification === "verified") result.linksVerified++;
-    else result.linksUnconfirmed++;
-    if (recovered) result.linksRecovered++;
-  }
-  return null;
-}
-
-/**
- * Complementary to the missing-link warning above: a source whose links are
- * PRESENT but keep coming back mismatch/dead after verification (recovery
- * included) is exactly as unreliable in practice, just for a different
- * reason — surfaced with its own advisory rather than silently accumulating
- * "unconfirmed" badges the user has to notice by hand. Two cheap COUNT-only
- * queries (no rows transferred) over this page's matched postings.
- */
-async function linkTrustWarning(db: SupabaseClient, page: WatchedPage): Promise<string | null> {
-  const { count: wrong, error: wrongError } = await db
-    .from("postings")
-    .select("id", { count: "exact", head: true })
-    .eq("page_id", page.id)
-    .eq("filter_status", "matched")
-    .in("link_verification", ["mismatch", "dead"]);
-  if (wrongError || !wrong) return null;
-
-  const { count: checked, error: checkedError } = await db
-    .from("postings")
-    .select("id", { count: "exact", head: true })
-    .eq("page_id", page.id)
-    .eq("filter_status", "matched")
-    .in("link_verification", ["verified", "mismatch", "dead"]);
-  if (checkedError || !checked || checked < LOW_LINK_QUALITY_MIN_ROWS) return null;
-  if (wrong / checked <= LOW_LINK_QUALITY_THRESHOLD) return null;
-
-  return `${LOW_LINK_TRUST_PREFIX} (${wrong}/${checked} checked so far) — postings still show up, but "View ` +
-    `Posting" often falls back to the source listing here. Treat direct links from this source with extra caution.`;
-}
-
-/**
  * Everything about how this poll's postings were obtained: either a known
  * ATS platform or RSS/Atom feed (structured — postings straight from the
  * source, no LLM needed), or the generic fetch chain (raw text, still needs
@@ -778,16 +618,35 @@ interface PageContent {
   truncated: boolean;
   /** The generic path's citation table (see fetcher.ts htmlToTextWithLinks) —
    * empty for the structured path, which never needs one. Also reused by the
-   * link-verification step's recovery (see verifyLinks) so a failed link can
-   * be re-derived from this same crawl without a second fetch. */
+   * citation fallback on reader-proxy pages, which have no DOM cards. */
   links: PageLink[];
+  /** Per-card title→link pairs read from the page's markup (_shared/cards.ts).
+   * The authoritative link source; empty for the structured path (which
+   * already has platform URLs) and for markdown proxy responses. */
+  cards: CardLink[];
+  /** This fetch settled for content carrying no links at all — see
+   * selectAttempt in _shared/fetcher.ts. Drives strategy_probe_after. */
+  degraded: boolean;
+  /** The full strategy re-probe was skipped this poll because the page is
+   * inside its cooldown window, so a degraded result here says nothing new
+   * and must not extend or reset that window. */
+  probeSkipped: boolean;
 }
 
-/** PageLink (fetcher.ts's citation table entry) → LinkCandidate (links.ts's
- * title-matching input) — same {href, text} shape, just named for their
- * respective modules. */
-function toLinkCandidates(links: PageLink[]): LinkCandidate[] {
-  return links.map((l) => ({ href: l.href, text: l.text }));
+/** How long a page that ran the whole strategy chain without finding a single
+ * link is excused from doing it again. Long enough that a permanently
+ * link-free page costs one fetch per poll instead of four, short enough that
+ * a site which fixes its markup is picked up the same day. */
+const STRATEGY_PROBE_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+
+/** The next value for watched_pages.strategy_probe_after. */
+function nextProbeAfter(page: WatchedPage, fetched: PageContent): string | null {
+  // Something on this page carried a link — no reason to hold back next time.
+  if (!fetched.degraded) return null;
+  // Degraded, but we didn't actually probe: leave the existing window alone.
+  if (fetched.probeSkipped) return page.strategy_probe_after;
+  // A real, complete probe found nothing better. Don't repeat it for a while.
+  return new Date(Date.now() + STRATEGY_PROBE_COOLDOWN_MS).toISOString();
 }
 
 async function fetchPageForPolling(page: WatchedPage): Promise<PageContent> {
@@ -800,8 +659,17 @@ async function fetchPageForPolling(page: WatchedPage): Promise<PageContent> {
   const structured = await fetchStructured(page.url, tryRss);
   if (structured) return fromStructured(structured);
 
+  // A page that already ran the full chain and still found nothing with a
+  // link on it is excused from re-probing until its cooldown expires.
+  const probeSkipped = page.strategy_probe_after !== null &&
+    Date.parse(page.strategy_probe_after) > Date.now();
+
   try {
-    const fetched = await fetchPageContent(page.url, page.fetch_strategy as FetchStrategy | null);
+    const fetched = await fetchPageContent(
+      page.url,
+      page.fetch_strategy as FetchStrategy | null,
+      { skipLinkProbe: probeSkipped },
+    );
     return {
       postings: null,
       content: fetched.content,
@@ -809,6 +677,9 @@ async function fetchPageForPolling(page: WatchedPage): Promise<PageContent> {
       strategy: fetched.strategy,
       truncated: fetched.truncated,
       links: fetched.links,
+      cards: fetched.cards,
+      degraded: fetched.degraded,
+      probeSkipped,
     };
   } catch (fetchError) {
     // Every fetch strategy failed — most often an anti-bot wall that no
@@ -833,6 +704,11 @@ function fromStructured(structured: { strategy: string; postings: ExtractedPosti
     strategy: structured.strategy,
     truncated: false,
     links: [],
+    cards: [],
+    // ATS/RSS postings carry real platform URLs, so the link-probe machinery
+    // simply doesn't apply to them.
+    degraded: false,
+    probeSkipped: false,
   };
 }
 
@@ -855,12 +731,6 @@ interface CrawlLinkRow {
  * inheriting whatever verdict its previous URL earned. */
 function freshLinkVerificationFields(): Record<string, unknown> {
   return {
-    link_verification: "unverified",
-    link_final_url: null,
-    link_checked_at: null,
-    link_check_attempts: 0,
-    link_retry_after: null,
-    link_attempts: [],
   };
 }
 
@@ -987,9 +857,6 @@ async function pollPage(
     companiesResearched: 0,
     companyWarned: 0,
     notified: 0,
-    linksVerified: 0,
-    linksRecovered: 0,
-    linksUnconfirmed: 0,
   };
 
   // 1. Fetch: a known ATS platform or RSS feed skips HTML+LLM entirely
@@ -1004,18 +871,15 @@ async function pollPage(
     // wall going up) — that backlog normally only clears once fetching
     // succeeds again (the hash-unchanged branch below), which would leave it
     // stuck for as long as the page keeps failing. Clear it here too, in the
-    // same invocation, regardless of the fetch outcome. No fresh crawl data
-    // exists on this branch, so link verification has no recovery candidates
-    // to draw from (null) — the primary check still runs and still counts.
+    // same invocation, regardless of the fetch outcome.
     const screenError = await screenPending(db, page, cfg, result);
-    const verifyError = await verifyLinks(db, page, null, result);
     const companyError = await companyPending(db, page, cfg, result);
     const notifyError = await notifyPending(db, page, cfg, result);
 
     const message = fetchError instanceof Error ? fetchError.message : String(fetchError);
     const newFailureCount = page.failure_count + 1;
     const durablyBlocked = isBlockedError(message) && newFailureCount >= DURABLE_FAILURE_THRESHOLD;
-    const backlogError = screenError ?? verifyError ?? companyError ?? notifyError;
+    const backlogError = screenError ?? companyError ?? notifyError;
     await db.from("watched_pages").update({
       last_checked_at: new Date().toISOString(),
       last_error: durablyBlocked ? BLOCKED_SOURCE_MESSAGE : message.slice(0, 500),
@@ -1033,30 +897,23 @@ async function pollPage(
   const hash = await sha256(fetched.hashInput);
   if (hash === page.last_content_hash) {
     const screenError = await screenPending(db, page, cfg, result);
-    // The fetch that got us here DID succeed this run, even though its
-    // content matches last time's — so its link table is fresh crawl data,
-    // usable as recovery candidates the same as on the main path below.
-    const verifyError = await verifyLinks(db, page, toLinkCandidates(fetched.links), result);
     const companyError = await companyPending(db, page, cfg, result);
     const notifyError = await notifyPending(db, page, cfg, result);
     // A link-quality warning was set on the crawl that last actually
     // extracted content — nothing here re-extracts on an unchanged hash, so
     // preserve it instead of silently wiping it after a single poll cycle.
-    // The link-TRUST warning, by contrast, is cheap to recompute fresh every
-    // time (two COUNT queries) since verifyLinks may have just changed the
-    // verification stats it's based on.
     const preservedWarning = page.last_error?.startsWith(LOW_LINK_QUALITY_PREFIX) ? page.last_error : null;
-    const trustWarning = await linkTrustWarning(db, page);
     await db.from("watched_pages").update({
       last_checked_at: new Date().toISOString(),
-      last_error: screenError ?? verifyError ?? companyError ?? notifyError ?? trustWarning ?? preservedWarning,
+      last_error: screenError ?? companyError ?? notifyError ?? preservedWarning,
       failure_count: 0,
       fetch_strategy: fetched.strategy,
+      strategy_probe_after: nextProbeAfter(page, fetched),
       poll_claimed_at: null,
     }).eq("id", page.id);
     result.status = "unchanged";
-    if (screenError ?? verifyError ?? companyError ?? notifyError) {
-      result.error = (screenError ?? verifyError ?? companyError ?? notifyError)!;
+    if (screenError ?? companyError ?? notifyError) {
+      result.error = (screenError ?? companyError ?? notifyError)!;
     }
     return result;
   }
@@ -1067,10 +924,10 @@ async function pollPage(
   // 3b. Resolve each posting's link deterministically, with no network
   // access. Structured (ATS/RSS) postings already carry a real platform URL
   // (Greenhouse absolute_url, etc.) — they're marked 'platform' directly and
-  // never touch resolvePostingLinks. The generic fetch+LLM path resolves the
-  // model's citation (or recovers one by matching titles against the
-  // crawl's own anchor text) via resolvePostingLinks (_shared/links.ts) —
-  // this is the step that makes a hallucinated URL structurally impossible.
+  // never touch resolvePostingLinks. The generic fetch+LLM path resolves it
+  // from the page's own markup: the link on the DOM card that displays this
+  // posting's title (_shared/cards.ts), falling back to the model's citation
+  // only on reader-proxy pages, which return markdown and have no cards.
   const resolvedLinks: ResolvedLink[] = fetched.postings !== null
     ? postings.map((p): ResolvedLink => ({
       url: p.url ? canonicalUrl(p.url, page.url) : null,
@@ -1078,7 +935,7 @@ async function pollPage(
       score: null,
       note: null,
     }))
-    : resolvePostingLinks(postings, fetched.links, page.url);
+    : resolvePostingLinks(postings, fetched.links, page.url, fetched.cards);
 
   // 4. Diff by dedupe key — the unique(page_id, dedupe_key) constraint plus
   // ignoreDuplicates makes this return only genuinely-new rows. New rows on
@@ -1161,27 +1018,18 @@ async function pollPage(
   // with the company layer off, directly for notification.
   const screenError = await screenPending(db, page, cfg, result);
 
-  // 5b. Verify links for postings just marked 'matched' (plus any left over
-  // from an earlier run's budget) — before company research/notify, so a
-  // wrong link is caught and, where possible, corrected before the user ever
-  // sees it. Recovery draws on this run's own crawl data (no second fetch).
-  const verifyError = await verifyLinks(db, page, toLinkCandidates(fetched.links), result);
-
   // 6. Research + judge the companies behind company-queued matches, then
   // release them to the notify queue (annotated, never suppressed).
   const companyError = await companyPending(db, page, cfg, result);
 
   // 7. Notify queued postings (this run's matches plus any earlier failures).
-  // Baseline crawls queue nothing, so this is a no-op there. Verification
-  // never blocks this — a row that ran out of link-check budget still
-  // notifies, with an "unverified" badge rather than a bare direct link.
+  // Baseline crawls queue nothing, so this is a no-op there.
   const notifyError = await notifyPending(db, page, cfg, result);
 
   // 8. Persist page state — always, even when screening or Telegram failed.
   const truncatedNote = fetched.truncated ? "content truncated to 100k chars before extraction" : null;
-  const trustWarning = await linkTrustWarning(db, page);
-  const stepError = screenError ?? verifyError ?? companyError ?? notifyError;
-  const softNote = [truncatedNote, linkWarning, trustWarning].filter(Boolean).join(" | ") || null;
+  const stepError = screenError ?? companyError ?? notifyError;
+  const softNote = [truncatedNote, linkWarning].filter(Boolean).join(" | ") || null;
   await db.from("watched_pages").update({
     last_content_hash: hash,
     last_checked_at: new Date().toISOString(),
@@ -1189,6 +1037,7 @@ async function pollPage(
     failure_count: 0,
     first_crawl_done: true,
     fetch_strategy: fetched.strategy,
+    strategy_probe_after: nextProbeAfter(page, fetched),
     poll_claimed_at: null,
   }).eq("id", page.id);
 
@@ -1301,9 +1150,6 @@ async function runPoll(
         companiesResearched: 0,
         companyWarned: 0,
         notified: 0,
-        linksVerified: 0,
-        linksRecovered: 0,
-        linksUnconfirmed: 0,
         error: message,
       });
     }

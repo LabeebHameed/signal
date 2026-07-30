@@ -52,13 +52,13 @@ pg_cron (every 15 min)
              no LLM; otherwise generic fetch chain (browser headers → crawler UA →
              free keyless reader proxy), each attempt screened for block/challenge pages
           2. hash content → skip extraction if unchanged; still flushes any backlog left
-             by earlier judge/company/Telegram/link-verification failures
-          3. LLM extracts postings as JSON (structured-source path skips this) — every
-             hyperlink on the page is rewritten into a numbered citation marker first, so
-             the model can only CITE a real link it can see, never author a URL of its own
-          4. resolve each posting's link deterministically (no network): the model's
-             citation, or a raw URL it wrote matched back against a real link, or a
-             title-vs-anchor-text fallback match — never trusted as-is
+             by earlier judge/company/Telegram failures
+          3. LLM extracts postings as JSON (structured-source path skips this)
+          4. resolve each posting's link deterministically (no network): the link on the
+             page's own DOM card that displays this posting's title — identified as the
+             one anchor slot unique to each card, so a company/tag link sharing the card
+             can never win. Reader-proxy pages (markdown, no DOM) fall back to the older
+             numbered-citation mechanism, where the model returns a link id, never a URL
           5. diff by normalized dedupe key (tracking params stripped, so a rotating
              click-token doesn't look like a new posting every poll) against `postings`;
              re-crawl healing repairs a stored link's casing/provenance and merges a
@@ -69,23 +69,18 @@ pg_cron (every 15 min)
              against your job profile, one batched call per page → verdict + one-line
              reason per posting; a thin-posting backstop catches sources that hand the
              judge almost nothing but a bare title
-               matched  → link verification, then company layer (if enabled), then Telegram
+               matched  → company layer (if enabled), then Telegram
                filtered → kept in the UI with its verdict, never notified
-          7. link verification (matched postings only): a live fetch confirms the
-             resolved link really is this posting; a link proven wrong (not just
-             blocked/walled) gets one recovery attempt against this same crawl's data
-             before falling back to linking the source listing page instead
-          8. company layer (optional): research each match's company (Tavily search
+          7. company layer (optional): research each match's company (Tavily search
              + LLM dossier, cached 30 days) → ok, or warn with a caution — never blocked
-          9. cross-source dedup: a job already notified recently under a different watched
+          8. cross-source dedup: a job already notified recently under a different watched
              page (same normalized title+company) is linked as a duplicate, not re-sent
-          10. matched rows → one short Telegram message each: title, one-line reason,
-              company (+ type when researched), location, pay, link — a link only ever
-              points straight at the posting once verified, otherwise the message links
-              the source listing instead; the full judge reasoning and company dossier
-              live on the Inbox page, not in the message itself (the first-ever crawl of
-              a page is a silent baseline — no notification flood)
-          11. persist state: update last content hash, check error, and failure count
+          9. matched rows → one short Telegram message each: title, one-line reason,
+             company (+ type when researched), location, pay, and the posting's link; the
+             full judge reasoning and company dossier live on the Inbox page, not in the
+             message itself (the first-ever crawl of a page is a silent baseline — no
+             notification flood)
+          10. persist state: update last content hash, check error, and failure count
 
 web UI (Vite + React, static)
   └─> Edge Function: api   (all requests carry the x-admin-token header)
@@ -195,6 +190,35 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   or sits behind a genuine Cloudflare/DataDome challenge, will still fail
   honestly — nothing keyless beats that. Swap in a URL that serves the
   listing as static HTML or a known ATS/RSS source if one exists.
+- **Postings from one source have no link at all**: the
+  strategy that fetched the page returned readable content but none of the
+  page's links, so there was nothing for the extraction model to cite. Signal
+  now treats a link-free result as a degraded render and keeps trying the
+  other strategies, so this normally corrects itself on the next poll and the
+  source switches strategy (visible on the Sources page). A page that has no
+  links under *any* strategy is left on its best result and excused from
+  re-probing for 12 hours (`watched_pages.strategy_probe_after`) rather than
+  paying for the full chain every poll.
+- **`supabase db push` says "Remote migration versions not found in local
+  migrations directory"**: the listed versions are long timestamps
+  (`20260724134037`) rather than this repo's numbered filenames. That happens
+  when a migration was applied through the Supabase MCP connector (or the
+  dashboard) instead of the CLI — those record a generated timestamp version,
+  so the CLI sees remote history it can't match to a file and refuses to push
+  anything. Fix it by renaming those history rows to the filenames they
+  actually correspond to:
+
+  ```sql
+  select version, name from supabase_migrations.schema_migrations order by version;
+  -- then, for each mismatched row:
+  update supabase_migrations.schema_migrations
+     set version = '0019' where version = '20260728122947';
+  ```
+
+  (`supabase migration repair --status reverted <version>` is the CLI's own
+  route, but it marks the migration un-applied, so only use it when the
+  migration's SQL really hasn't run.) Prefer one tool or the other for
+  migrations — mixing them is what causes this.
 
 ## How filtering works
 
@@ -287,48 +311,51 @@ Either way, on first load the UI asks for the `ADMIN_TOKEN` value, then:
   ⚠ suspicious), the dossier, and source links. This is where the full
   reasoning lives — Telegram is just the ping to go look.
 
-## How link trust works
+## How link accuracy works
 
-Every posting carries a link, and that link has to be provably the exact
-posting shown — not a different job, not some other link off the page, and
-never something the model made up.
+Every posting carries a link, and that link has to be the exact posting shown
+— not a different job, not some other link off the page, and never something
+the model made up.
 
-- **The model cites, it never authors.** On the generic fetch+LLM path, every
-  hyperlink on the page is rewritten into a numbered citation marker
-  (`[[7]]Senior Designer[[/7]]`) before extraction, and the extraction schema
-  asks for a link **id**, not a URL — so a hallucinated link is structurally
-  impossible, not just unlikely. A URL the model writes anyway is only ever
-  honored when it matches a real link already on the page; anything else is
-  discarded. Known ATS platforms and RSS feeds (Greenhouse, Lever, Ashby,
-  Himalayas) skip this entirely — those links come straight from the
-  platform's own data, never through an LLM.
-- **Deterministic reconciliation, no network.** The cited link is checked
-  against unambiguous non-posting shapes (an ad/tracking wrapper, a bare
-  company/category index page, a login/marketing page, the listing page
-  itself) and, when two postings somehow cite the same link, resolved by
-  which one's title actually matches that link's text. Nothing here ever
-  guesses a URL — recovery only ever picks from links that really exist on
-  the page.
-- **Live verification, matched postings only.** Once the job judge marks a
-  posting a match, its link gets a real HTTP check confirming the posting's
-  own title is actually on that page. A wall or timeout on the job site
-  (403, anti-bot challenge, 5xx) is never treated as evidence the link is
-  wrong — only a dead page (404/410) or a page that loads fine but isn't
-  this posting counts as proof.
-- **A proven-wrong link gets one recovery attempt** — re-matching the title
-  against this same crawl's own links (no second fetch, no guessing at URL
-  patterns, no site search) — before falling back.
-- **Never a wrong link, never a dead end.** A link that's still unconfirmed
-  (never checked yet, or the site walled the check) still shows as **View
-  Posting** with a small "link unconfirmed" badge — it was never proven
-  wrong, so it isn't hidden. A link **proven** wrong instead shows **Open
-  source listing**, pointing at the watched page the posting came from, so
-  you always land somewhere real. Telegram is stricter: it only ever links
-  straight to the posting once verified, and links the source listing
-  otherwise — there's no room for a badge in a one-shot message.
-- **Existing postings from before this existed** are marked unverified and
-  are never swept into a bulk re-check — they heal the next time their page
-  is naturally re-crawled.
+The link is captured **at scrape time, from the page's own markup**. A job
+listing renders each posting as a card holding both the title and its link, so
+that association is structural: reading it needs no model judgement and no
+extra HTTP request.
+
+- **Card extraction is the primary path.** The page is parsed, repeated
+  sibling containers (the cards) are detected, and within each one the job
+  link is identified as the anchor slot whose destination is *unique per
+  card*. That single rule is what separates it from the company, category and
+  tag links sharing the same card — those repeat across cards, so they can
+  never win. Titles come from the card's own heading, or from the anchor text
+  when a site uses no headings.
+- **Duplicate titles are split by company.** Two different companies really do
+  post "Staff Product Designer" on the same page; the card's own text carries
+  the employer, so the right one is picked. If it is still ambiguous, the
+  posting gets **no** link rather than a guessed one.
+- **Everything is screened.** A card link is still checked against unambiguous
+  non-posting shapes (ad/tracking wrappers, bare company/category index pages,
+  login/marketing pages, the listing page itself) before it is stored.
+- **ATS and RSS sources skip all of this.** Greenhouse, Lever, Ashby and
+  Himalayas hand over real platform URLs directly — those never go near an LLM.
+- **Reader-proxy pages keep the citation fallback.** When a site can only be
+  reached through a text proxy, the response is markdown with no DOM and
+  therefore no cards. Those pages still use the older mechanism: every
+  hyperlink is rewritten into a numbered marker (`[[7]]Senior Designer[[/7]]`)
+  and the model returns a link **id**, never a URL, so a hallucinated link
+  stays structurally impossible there too.
+- **Never a dead end.** A posting with no defensible link of its own shows
+  **Open source listing**, pointing at the watched page it was found on.
+
+There is deliberately **no post-hoc link verification**, and no "unconfirmed"
+badge. An earlier version re-fetched each matched posting to confirm its title
+was on the page; it could not work, because the sites that would need checking
+are exactly the ones that wall a server-side fetch. In production every single
+failed check recorded the same cause — `HTTP 403` — from a datacenter-IP block
+(dailyremote.com) or a Cloudflare challenge (himalayas.app, whose links come
+straight from its API and were correct all along). The result was a warning
+badge on most of the Inbox that told you nothing. A link read off the card that
+displays the posting's title does not need re-proving, and costs nothing.
 
 ## Behavior notes
 
@@ -359,16 +386,17 @@ never something the model made up.
 supabase/
   migrations/                       # schema: tables + RLS, pg_cron job, notify queue,
                                     # filter layer, dedup, fetch strategy, company layer,
-                                    # link provenance + verification
+                                    # link provenance
   functions/
     poll-pages/index.ts             # the poller (fetch → extract → resolve links → dedupe →
-                                    # keyword gate → judge → verify links → company → notify)
+                                    # keyword gate → judge → company → notify)
     api/index.ts                    # CRUD for the UI
     _shared/                        # fetcher (+ proxy fallback, anchor citation markers),
-                                    # ats (Greenhouse/Lever/Ashby/RSS), links (deterministic
-                                    # link resolution + re-crawl healing), verify (live link
-                                    # verification), dedupe, LLM adapters, judge, profile
-                                    # expansion, company research, telegram, types
+                                    # ats (Greenhouse/Lever/Ashby/RSS), dom + cards (per-card
+                                    # title→link extraction from page markup), links
+                                    # (link resolution + re-crawl healing), dedupe, LLM
+                                    # adapters, judge, profile expansion, company research,
+                                    # telegram, types
     _shared/*_test.ts                # Deno.test unit tests — see Development below
 web/                                # React UI: Dashboard, Inbox, Workflow, Sources,
                                     # Postings, Profile, Settings (vercel.json included)
@@ -382,18 +410,33 @@ network calls. Run them with the [Deno CLI](https://deno.com):
 
 ```sh
 deno test supabase/functions/_shared/          # every backend unit test
-deno test supabase/functions/_shared/links_test.ts   # a single file
+deno test supabase/functions/_shared/cards_test.ts   # a single file
 ```
 
 Frontend typecheck + build: `cd web && npm run build` (`tsc && vite build`).
 There's no CI configured — run both locally before pushing.
 
-**Deploy note:** the anchor-citation change to how pages are converted to
-text means every watched page's content hash changes once, so the first poll
-after deploying it re-extracts every page in one run — expected, and it's
-what applies the fix. Postings whose link only changed shape (not their
-identity) are merged into their existing row rather than re-notified; see
-"How link trust works" above.
+**The one external runtime dependency** is
+[`deno_dom`](https://deno.land/x/deno_dom) (the `deno-dom-wasm` build, pinned
+to `v0.1.45`), used to parse a listing page into an element tree. It earns the
+exception: reading a posting's link off its card is entirely a question of
+element structure — which anchor sits inside which repeated container — and the
+regex flattening used everywhere else in this codebase destroys exactly that.
+It is confined to `_shared/dom.ts`, which exposes only what `_shared/cards.ts`
+needs, so it can be swapped for a hand-rolled tokenizer without touching the
+extraction logic. It parses a 200 KB listing page in roughly 110 ms and is
+confirmed working on Supabase's edge runtime.
+
+**Deploy note:** apply migrations **before** deploying the functions —
+0020 adds `watched_pages.strategy_probe_after`, and 0021 drops the old
+verification columns and adds `'card'` to the `link_source` constraint. The new
+code writes both, so deploying it against an un-migrated database fails on the
+constraint. A page whose fetch strategy changes (for example, one that escapes a
+strategy returning no links) produces different page text, so its content hash
+changes once and it re-extracts on the next poll — expected, and it is what
+applies the fix to existing rows. Postings whose link only changed shape (not
+their identity) are merged into their existing row rather than re-notified; see
+"How link accuracy works" above.
 
 ## Out of scope (future phases)
 

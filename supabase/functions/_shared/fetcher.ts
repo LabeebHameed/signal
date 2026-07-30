@@ -20,13 +20,20 @@
 // and are tried first by the caller — they skip this module entirely when
 // they apply, since they're public data APIs, not the rendered page.
 //
-// Anchor tokenization: every hyperlink on the page is rewritten into a
-// numbered citation marker (`[[7]]anchor text[[/7]]`) alongside a table of
-// {id, href, text}. The extraction model (_shared/llm.ts) can then only ever
-// refer to a link by citing one of these ids — never by writing a URL of its
-// own — which is what makes a hallucinated posting link structurally
-// impossible on this path, the same way judge.ts's `[id]` postings already
-// work for the judge's own citations.
+// Two link channels come out of a fetch, in order of authority:
+//
+// 1. `cards` — for HTML bodies, _shared/cards.ts reads each posting's link
+//    straight off the DOM card that displays that posting's title. This is
+//    the authoritative one: it is structural, needs no model judgement, and
+//    costs no extra request.
+// 2. `links` — anchor tokenization. Every hyperlink is rewritten into a
+//    numbered citation marker (`[[7]]anchor text[[/7]]`) alongside a table of
+//    {id, href, text}, so the extraction model can refer to a link only by
+//    citing an id, never by writing a URL of its own. This still carries the
+//    reader-proxy strategies, whose markdown has no DOM and therefore no
+//    cards.
+
+import { type CardLink, extractCardLinks } from "./cards.ts";
 
 const MAX_CONTENT_CHARS = 100_000;
 
@@ -49,6 +56,12 @@ export interface FetchResult {
   strategy: FetchStrategy;
   /** The citation table for `content`'s `[[id]]` markers — see PageLink. */
   links: PageLink[];
+  /** Per-card title→link pairs read from the page's markup — see AttemptOutcome. */
+  cards: CardLink[];
+  /** True when the chain settled for a lesser tier — a linkless page or a
+   * shell — because nothing better was reachable. poll-pages uses this to
+   * throttle how often it re-runs the full strategy probe. */
+  degraded: boolean;
 }
 
 // Two header profiles for the direct attempt.
@@ -299,6 +312,39 @@ function looksLikeShell(content: string): boolean {
   return content.length < 500;
 }
 
+/** What one strategy produced. `linkBearing` records whether the body was
+ * parsed for anchors at all: an HTML page or proxy markdown always is, a
+ * plain-text/JSON body never is. Without that distinction the zero-link rule
+ * in selectAttempt() would punish a perfectly good text response for a
+ * property it can't have. */
+export interface AttemptOutcome {
+  content: string;
+  truncated: boolean;
+  links: PageLink[];
+  linkBearing: boolean;
+  /** Per-card title→link pairs read from the page's markup (_shared/cards.ts).
+   * The authoritative source for a posting's link. Empty for markdown/plain
+   * bodies, which have no DOM — those fall back to the model's citation. */
+  cards: CardLink[];
+}
+
+/**
+ * The reader proxies prepend their own YAML frontmatter (`url:`, `title:`,
+ * `description:`, `access_date:`) to every response. On a page that renders
+ * to nothing — contra.com is a live example, 415 bytes total — that block is
+ * effectively the whole body, and it is pure marketing copy: a title and a
+ * description. Handing it to the extraction model produced seven confidently
+ * invented "postings" out of a sentence about connecting with next-gen
+ * talent. Stripping it first means a content-free page measures as
+ * content-free and fails the chain honestly instead.
+ *
+ * Only a leading fence is removed — a `---` rule further down is ordinary
+ * markdown and must survive.
+ */
+export function stripReaderFrontmatter(body: string): string {
+  return body.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, "").trimStart();
+}
+
 /** An explicit anti-bot challenge page is never ambiguous and never worth
  * accepting even as a last resort — passing Cloudflare/DataDome challenge
  * markup to the LLM risks it hallucinating postings out of boilerplate.
@@ -322,17 +368,17 @@ async function fetchDirect(
   url: string,
   headers: Record<string, string>,
   timeoutMs: number,
-): Promise<{ content: string; truncated: boolean; links: PageLink[] }> {
+): Promise<AttemptOutcome> {
   const res = await fetchWithTimeout(url, headers, timeoutMs);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = await res.text();
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("html")) {
     const { text, links, truncated } = htmlToTextWithLinks(body, url);
-    return { content: text, truncated, links };
+    return { content: text, truncated, links, linkBearing: true, cards: extractCardLinks(body, url) };
   }
   const { content, truncated } = cap(body.trim());
-  return { content, truncated, links: [] };
+  return { content, truncated, links: [], linkBearing: false, cards: [] };
 }
 
 /** pageUrl is the ORIGINAL page being crawled (not the proxy URL) — hrefs in
@@ -341,45 +387,63 @@ async function fetchDirect(
 async function fetchViaProxy(
   proxyUrl: string,
   pageUrl: string,
-): Promise<{ content: string; truncated: boolean; links: PageLink[] }> {
+): Promise<AttemptOutcome> {
   const res = await fetchWithTimeout(proxyUrl, { "Accept": "text/plain,text/markdown,text/html,*/*" }, 20_000);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const body = (await res.text()).trim();
+  const body = stripReaderFrontmatter((await res.text()).trim());
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("html")) {
     const { text, links, truncated } = htmlToTextWithLinks(body, pageUrl);
-    return { content: text, truncated, links };
+    return { content: text, truncated, links, linkBearing: true, cards: extractCardLinks(body, pageUrl) };
   }
   // Proxies return markdown already stripped of HTML markup — extract its
   // `[text](url)` links into the same citation-marker shape instead of
   // running the HTML stripper a second time, which would mangle them.
+  // Markdown carries no DOM, so there are no cards to read — these pages are
+  // exactly why the model's link_id citation is still kept as a fallback.
   const { text, links, truncated } = markdownToTextWithLinks(body, pageUrl);
-  return { content: text, truncated, links };
+  return { content: text, truncated, links, linkBearing: true, cards: [] };
 }
 
 /**
- * Fetch page content, preferring whichever strategy worked last time for
- * this page, then working through direct (two header profiles) and the
- * proxy chain in order until one returns real, unblocked content.
+ * Walk a lazy list of fetch strategies and return the best result, stopping
+ * at the first fully-good one so a healthy page still pays for exactly one
+ * request.
+ *
+ * Acceptance is tiered, best to worst:
+ *
+ *   1. **usable**   — real content that carries at least one link
+ *   2. **linkless** — real content, but not a single link on it
+ *   3. **shell**    — content too small to be a real listing
+ *   4. blocked / errored — never acceptable at any price
+ *
+ * Tier 2 is the tier this function exists for. A job *listing* page with no
+ * anchors at all is a degraded render, not a page without jobs — and the
+ * extraction model can only cite links it was shown, so a linkless fetch
+ * yields postings that structurally cannot be given a URL. nodesk.co was
+ * exactly this: pure.md returns its titles, companies and salaries but none
+ * of its job links, while a plain direct fetch of the same page carries all
+ * 66 of them. Because the winning strategy is remembered in
+ * watched_pages.fetch_strategy and retried first forever, that one unlucky
+ * pick stranded 199 postings with no link at all.
+ *
+ * Kept as a soft signal rather than a hard reject: some boards genuinely
+ * render without anchors, and a linkless page still beats no page. It only
+ * ever costs extra attempts, never content — hence the ordering below, where
+ * a linkless result outranks a shell instead of being lumped in with it.
+ *
+ * Attempts are passed in as thunks so the whole decision is testable with no
+ * network: see fetcher_test.ts.
  */
-export async function fetchPageContent(
-  url: string,
-  preferredStrategy?: FetchStrategy | null,
+export async function selectAttempt(
+  attempts: Array<{ name: FetchStrategy; run: () => Promise<AttemptOutcome> }>,
+  opts: { enforceLinks?: boolean } = {},
 ): Promise<FetchResult> {
-  const attempts: Array<{ name: FetchStrategy; run: () => Promise<{ content: string; truncated: boolean; links: PageLink[] }> }> = [
-    { name: "direct", run: () => fetchDirect(url, BROWSER_HEADERS, 15_000) },
-    { name: "direct-alt", run: () => fetchDirect(url, CRAWLER_HEADERS, 15_000) },
-    ...PROXIES.map((p) => ({ name: p.name, run: () => fetchViaProxy(p.build(url), url) })),
-  ];
-  // Try the strategy that worked last time first, so a healthy page pays
-  // for exactly one attempt instead of re-discovering the winner every poll.
-  if (preferredStrategy) {
-    const idx = attempts.findIndex((a) => a.name === preferredStrategy);
-    if (idx > 0) attempts.unshift(...attempts.splice(idx, 1));
-  }
-
+  const enforceLinks = opts.enforceLinks ?? true;
   const errors: string[] = [];
+  let bestLinkless: FetchResult | null = null;
   let bestShell: FetchResult | null = null;
+
   for (const attempt of attempts) {
     try {
       const result = await attempt.run();
@@ -392,21 +456,69 @@ export async function fetchPageContent(
       }
       if (looksLikeShell(result.content)) {
         if (!bestShell || result.content.length > bestShell.content.length) {
-          bestShell = { ...result, strategy: attempt.name };
+          bestShell = { ...result, strategy: attempt.name, degraded: true };
         }
         continue;
       }
-      return { ...result, strategy: attempt.name };
+      // Only content that was actually parsed for anchors can be judged on
+      // link count — a plain-text or JSON body has none by construction.
+      if (enforceLinks && result.linkBearing && result.links.length === 0) {
+        if (!bestLinkless || result.content.length > bestLinkless.content.length) {
+          bestLinkless = { ...result, strategy: attempt.name, degraded: true };
+        }
+        continue;
+      }
+      // Reported honestly whichever mode we're in: with enforceLinks off a
+      // link-free result is returned rather than skipped, but it is still a
+      // link-free result and the caller's throttle must not read it as a
+      // reason to start probing again.
+      return {
+        ...result,
+        strategy: attempt.name,
+        degraded: result.linkBearing && result.links.length === 0,
+      };
     } catch (e) {
       errors.push(`${attempt.name}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  // Nothing produced substantial, unblocked content. A tiny-but-legitimate
-  // fetch is still valid (some boards are honestly near-empty, "no open
-  // roles") — accepted only when nothing was an outright block, and only as
-  // the least-bad option.
+
+  // Nothing carried a link. Fall back in tier order: substantial-but-linkless
+  // content is still worth extracting from (the postings just won't get URLs),
+  // and a tiny-but-legitimate fetch is still valid (some boards are honestly
+  // near-empty, "no open roles"). Both only when nothing was an outright block.
+  if (bestLinkless) return bestLinkless;
   if (bestShell) return bestShell;
   throw new Error(errors.join(" | "));
+}
+
+/**
+ * Fetch page content, preferring whichever strategy worked last time for
+ * this page, then working through direct (two header profiles) and the
+ * proxy chain in order until one returns real, unblocked content.
+ *
+ * `skipLinkProbe` restores the pre-tiering behaviour of taking the first
+ * usable result even when it carries no links. poll-pages sets it for a page
+ * that already ran the full chain recently and still found nothing better,
+ * so a genuinely linkless page costs one request per poll rather than four.
+ */
+export async function fetchPageContent(
+  url: string,
+  preferredStrategy?: FetchStrategy | null,
+  opts: { skipLinkProbe?: boolean } = {},
+): Promise<FetchResult> {
+  const attempts: Array<{ name: FetchStrategy; run: () => Promise<AttemptOutcome> }> = [
+    { name: "direct", run: () => fetchDirect(url, BROWSER_HEADERS, 15_000) },
+    { name: "direct-alt", run: () => fetchDirect(url, CRAWLER_HEADERS, 15_000) },
+    ...PROXIES.map((p) => ({ name: p.name, run: () => fetchViaProxy(p.build(url), url) })),
+  ];
+  // Try the strategy that worked last time first, so a healthy page pays
+  // for exactly one attempt instead of re-discovering the winner every poll.
+  if (preferredStrategy) {
+    const idx = attempts.findIndex((a) => a.name === preferredStrategy);
+    if (idx > 0) attempts.unshift(...attempts.splice(idx, 1));
+  }
+
+  return await selectAttempt(attempts, { enforceLinks: !opts.skipLinkProbe });
 }
 
 // BROWSER_HEADERS and fetchWithTimeout are also reused by _shared/verify.ts's

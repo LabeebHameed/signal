@@ -434,7 +434,7 @@ Deno.serve(async (req: Request) => {
       let query = db
         .from("postings")
         .select(
-          "id, title, url, company, location, compensation, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_verdict, company_status, company_verdict, duplicate_of, keyword_filtered, negative_keyword_filtered, link_source, link_verification, link_final_url, link_checked_at, link_note, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
+          "id, title, url, company, location, compensation, posted_at, posted_text, first_seen_at, notified_at, pending_notify, filter_status, filter_verdict, company_status, company_verdict, duplicate_of, keyword_filtered, negative_keyword_filtered, link_source, link_note, companies(display_name, legitimacy, dossier, researched_at), watched_pages(label, url)",
           { count: "exact" },
         );
       if (["pending", "matched", "filtered", "skipped"].includes(status)) {

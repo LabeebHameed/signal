@@ -146,67 +146,38 @@ function resolveDirectUrl(posting: Posting): string | null {
   return rawUrl.startsWith("/") || rawUrl.startsWith("http") ? rawUrl : null;
 }
 
-const LINK_UNCONFIRMED_BADGE = "link unconfirmed";
-
 /**
- * The single place that decides what a posting's link control actually
- * does. A posting's own link is only ever presented as "View Posting" once
- * it's been positively verified (see postings.link_verification, migration
- * 0019) — anything not proven wrong still gets shown (an anti-bot wall on
- * the job site is not evidence the link is wrong), but flagged with a
- * visible badge; anything PROVEN wrong (link_verification 'mismatch' or
- * 'dead') falls back to the watched source-listing page instead, clearly
- * labelled, rather than ever risking a confidently wrong "View Posting".
+ * The single place that decides what a posting's link control actually does.
+ *
+ * There is no "unconfirmed" state any more, and no badge. A posting's link is
+ * read off the page's own markup at scrape time — the link belonging to the
+ * DOM card that displays that posting's title (see _shared/cards.ts) — or
+ * comes straight from an ATS/RSS feed. Neither needs proving afterwards, and
+ * the previous attempt to prove them could not work: the sites that would
+ * have needed checking are precisely the ones that wall or challenge a
+ * server-side fetch, so nearly every link ended up flagged "unconfirmed"
+ * while being perfectly fine.
+ *
+ * So: if we have a link, we show it. Only a posting with no link at all falls
+ * back to the source listing, so a card is never a dead end.
  */
 export function resolvePostingLink(posting: Posting): PostingLink {
   const directHref = resolveDirectUrl(posting);
-  const sourceHref = posting.watched_pages?.url?.trim() || null;
-
-  const disabled: PostingLink = { href: null, isDirect: false, label: "View Posting", badge: null, tooltip: null };
-  const openSourceListing = (badge: string, tooltip: string): PostingLink =>
-    sourceHref ? { href: sourceHref, isDirect: false, label: "Open source listing", badge, tooltip } : disabled;
-
-  if (directHref && posting.link_verification === "verified") {
-    return {
-      href: posting.link_final_url?.trim() || directHref,
-      isDirect: true,
-      label: "View Posting",
-      badge: null,
-      tooltip: null,
-    };
-  }
-
-  if (posting.link_verification === "dead") {
-    return openSourceListing(
-      "link expired",
-      "This posting's own link no longer resolves — it may have been filled. This opens the page it was found on.",
-    );
-  }
-
-  if (posting.link_verification === "mismatch") {
-    return openSourceListing(
-      LINK_UNCONFIRMED_BADGE,
-      "We couldn't confirm this posting's own link, so this opens the page it was found on.",
-    );
-  }
-
-  // 'unverified' / 'indeterminate' / legacy 'unknown': never PROVEN wrong,
-  // so the direct link is still shown — just flagged, not hidden.
   if (directHref) {
-    return {
-      href: directHref,
-      isDirect: true,
-      label: "View Posting",
-      badge: LINK_UNCONFIRMED_BADGE,
-      tooltip: "We haven't verified this link resolves to the exact posting yet.",
-    };
+    return { href: directHref, isDirect: true, label: "View Posting", badge: null, tooltip: null };
   }
 
-  // No direct URL at all (link_source 'none', or a row predating it).
-  return openSourceListing(
-    LINK_UNCONFIRMED_BADGE,
-    "This source doesn't expose a direct link for this posting — this opens the page it was found on.",
-  );
+  const sourceHref = posting.watched_pages?.url?.trim() || null;
+  if (sourceHref) {
+    return {
+      href: sourceHref,
+      isDirect: false,
+      label: "Open source listing",
+      badge: null,
+      tooltip: "This source doesn't expose a direct link for this posting — this opens the page it was found on.",
+    };
+  }
+  return { href: null, isDirect: false, label: "View Posting", badge: null, tooltip: null };
 }
 
 /**

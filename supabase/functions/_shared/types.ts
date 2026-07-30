@@ -20,25 +20,19 @@ export interface ExtractedPosting {
   compensation?: string;
 }
 
-/** How postings.url was obtained — see migration 0019 for the full
- * rationale. 'unknown' marks every row that predates link provenance and is
- * never set going forward. */
-export type LinkSource = "unknown" | "platform" | "cited" | "matched" | "none";
-
-/** Outcome of the live per-posting link check — see migration 0019.
- * 'indeterminate' (a wall/timeout on the JOB SITE) is deliberately distinct
- * from 'mismatch'/'dead' (positive evidence the LINK itself is wrong) — only
- * the latter two ever trigger the source-listing fallback in the UI. */
-export type LinkVerification = "unverified" | "verified" | "indeterminate" | "mismatch" | "dead";
-
-/** One entry in postings.link_attempts — the audit trail of every
- * check/recovery attempt, and the exclusion set recovery reads to avoid
- * retrying an href already proven wrong. */
-export interface LinkAttempt {
-  url: string;
-  outcome: LinkVerification;
-  at: string;
-}
+/**
+ * How postings.url was obtained, best-confidence first:
+ *
+ *   platform — straight from an ATS/RSS feed (Greenhouse absolute_url, etc.)
+ *   card     — read off the page's own markup: the link belonging to the DOM
+ *              card that displays this posting's title (_shared/cards.ts)
+ *   cited    — the model cited a numbered anchor; reader-proxy (markdown)
+ *              pages only, where there is no DOM to read cards from
+ *   matched  — recovered by matching the title against anchor text
+ *   none     — no defensible link was found (url is null)
+ *   unknown  — predates link provenance; never set going forward
+ */
+export type LinkSource = "unknown" | "platform" | "card" | "cited" | "matched" | "none";
 
 /** The currencies the compensation range can be expressed in. */
 export const COMP_CURRENCIES = ["USD", "EUR", "GBP", "INR"] as const;
@@ -243,6 +237,11 @@ export interface WatchedPage {
    * FetchStrategy in _shared/fetcher.ts and AtsStrategy in _shared/ats.ts.
    * Tried first on the next poll instead of re-discovering the winner. */
   fetch_strategy: string | null;
+  /** Suppresses the full strategy re-probe until this time. Set only when the
+   * whole chain ran and still found nothing carrying a link, so a page that
+   * genuinely renders without anchors doesn't pay for four fetches every
+   * poll. Cleared as soon as a strategy returns links. */
+  strategy_probe_after: string | null;
   /** Current steady-state check interval in minutes — doubles on repeated
    * unchanged polls (cap 6h), resets to 15 on a real content change. */
   check_interval_minutes: number;

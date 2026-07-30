@@ -92,19 +92,6 @@ const COMPANY_RESEARCH_PER_RUN = 3;
 const DURABLE_FAILURE_THRESHOLD = 5;
 const DURABLE_FAILURE_RECHECK_MS = 3 * 60 * 60 * 1000;
 
-// Live link verification is the only step that spends network on a
-// per-POSTING basis (everything else in this file is per-page), so it's
-// budgeted three ways, mirroring company.ts's research retry pattern
-// (MAX_COMPANY_RESEARCH_FAILURES/researchRetryDue) and ats.ts's
-// DISCOVERY_BUDGET_MS wall-clock cap:
-//   - rows per page per run (matches MAX_NOTIFICATIONS_PER_PAGE_RUN, so in
-//     practice every freshly-matched posting is settled the same run);
-//   - a wall-clock deadline per page per run, since a walled site can leave
-//     every check hanging until timeout;
-//   - a lifetime attempt cap per posting, after which it settles into
-//     whatever its last outcome was (verified/indeterminate/mismatch/dead)
-//     rather than being retried forever.
-
 /**
  * A fetch failure that means "this site refuses automated access", as
  * opposed to a transient network/server blip. Anti-bot walls answer with an

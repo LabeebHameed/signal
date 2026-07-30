@@ -327,3 +327,26 @@ Deno.test("stripReaderFrontmatter: content without frontmatter is untouched", ()
   const body = "# Jobs\n\n[Designer](/jobs/1)";
   assertEquals(stripReaderFrontmatter(body), body);
 });
+
+Deno.test("extractScriptPayloads: parses JSON-LD JobPosting scripts", () => {
+  const html = `<script type="application/ld+json">
+    {
+      "@type": "JobPosting",
+      "title": "Lead UX Engineer",
+      "url": "https://acme.io/jobs/101",
+      "hiringOrganization": { "name": "Acme Corp" }
+    }
+  </script>`;
+  const { links } = htmlToTextWithLinks(html, BASE);
+  assertEquals(links.length, 1);
+  assertEquals(links[0].href, "https://acme.io/jobs/101");
+});
+
+Deno.test("extractScriptPayloads: parses Next.js App Router / framework script payloads", () => {
+  const html = `<script>
+    self.__next_f.push([1, "{\\"title\\":\\"Product Designer\\",\\"url\\":\\"https://acme.io/jobs/102\\",\\"company\\":\\"Acme\\"}"]);
+  </script>`;
+  const { links } = htmlToTextWithLinks(html, BASE);
+  assertEquals(links.length, 1);
+  assertEquals(links[0].href, "https://acme.io/jobs/102");
+});

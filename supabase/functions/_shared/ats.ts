@@ -9,7 +9,7 @@
 
 import type { ExtractedPosting } from "./types.ts";
 
-export type AtsStrategy = "greenhouse" | "lever" | "ashby" | "himalayas" | "rss";
+export type AtsStrategy = "greenhouse" | "lever" | "ashby" | "himalayas" | "workingnomads" | "rss";
 
 export interface AtsResult {
   strategy: AtsStrategy;
@@ -160,6 +160,93 @@ async function fetchHimalayas(pageUrl: string): Promise<AtsResult | null> {
   }
   if (postings.length === 0) return null;
   return { strategy: "himalayas", postings };
+}
+
+function parseWorkingNomadsCategory(pageUrl: string): string | null {
+  try {
+    const url = new URL(pageUrl);
+    const path = url.pathname.replace(/^\/+|\/+$/g, "");
+    if (!path || path === "jobs") return null;
+    let category = path;
+    if (category.startsWith("remote-")) category = category.slice(7);
+    if (category.endsWith("-jobs")) category = category.slice(0, -5);
+    category = category.replace(/-/g, " ").trim();
+    if (category.length > 0) {
+      return category.charAt(0).toUpperCase() + category.slice(1);
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+/** workingnomads.com → public Elasticsearch JSON search API, no key required.
+ * Bypass AngularJS client-side rendering entirely. */
+async function fetchWorkingNomads(pageUrl: string): Promise<AtsResult | null> {
+  const url = new URL(pageUrl);
+  if (!/(^|\.)workingnomads\.com$/.test(url.hostname)) return null;
+
+  const category = parseWorkingNomadsCategory(pageUrl);
+  const queryPayload = category
+    ? { match: { category_name: category } }
+    : { match_all: {} };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  let res: Response;
+  try {
+    res = await fetch("https://www.workingnomads.com/jobsapi/_search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        size: 100,
+        query: queryPayload,
+        sort: [{ pub_date: { order: "desc" } }],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const data = (await res.json()) as {
+    hits?: {
+      hits?: Array<{
+        _source?: {
+          id?: number;
+          title?: string;
+          company?: string;
+          slug?: string;
+          apply_url?: string;
+          locations?: string[];
+          location_base?: string;
+          salary_range?: string;
+          pub_date?: string;
+        };
+      }>;
+    };
+  };
+
+  const hits = data.hits?.hits ?? [];
+  const postings: ExtractedPosting[] = [];
+  for (const h of hits) {
+    const p = h._source;
+    if (!p) continue;
+    const title = (p.title ?? "").trim();
+    if (!title) continue;
+    const company = p.company ? p.company.trim() : undefined;
+    const jobUrl = p.apply_url || (p.slug ? `https://www.workingnomads.com/jobs/${p.slug}` : undefined);
+    const location = (p.locations ?? []).length > 0
+      ? p.locations!.join(", ")
+      : p.location_base || "Remote";
+    const compensation = p.salary_range || undefined;
+    const postedText = p.pub_date || undefined;
+    postings.push({ title, company, location, compensation, url: jobUrl, posted_text: postedText });
+  }
+
+  if (postings.length === 0) return null;
+  return { strategy: "workingnomads", postings };
 }
 
 function extractTag(xml: string, tag: string): string | null {
@@ -320,7 +407,7 @@ async function fetchRss(pageUrl: string): Promise<AtsResult | null> {
  * nothing applies; the caller falls back to generic fetch + LLM extraction.
  */
 export async function fetchStructured(pageUrl: string, tryRss: boolean): Promise<AtsResult | null> {
-  for (const fetcher of [fetchGreenhouse, fetchLever, fetchAshby, fetchHimalayas]) {
+  for (const fetcher of [fetchGreenhouse, fetchLever, fetchAshby, fetchHimalayas, fetchWorkingNomads]) {
     try {
       const result = await fetcher(pageUrl);
       if (result) return result;

@@ -99,12 +99,18 @@ const BLOCK_PAGE_SIGNS = [
   "access denied",
   "enable javascript and cookies",
   "please enable javascript",
+  "please enable js",
+  "enable js and disable",
+  "disable any ad blocker",
   "verify you are human",
   "datadome",
+  "captcha-delivery",
   "perimeterx",
   "request unsuccessful. incapsula",
   "cf-browser-verification",
   "sorry, you have been blocked",
+  "turnstile",
+  "security check",
 ];
 
 // A citation marker: `[[7]]` opens link id 7, `[[/7]]` closes it. ASCII and
@@ -204,15 +210,82 @@ function repairCutTokenEdge(text: string): string {
 }
 
 /**
+ * Extract readable job listings and anchors embedded inside JSON script tags
+ * (JSON-LD schema.org/JobPosting, Next.js __NEXT_DATA__, self.__next_f, Nuxt, Remix, etc.)
+ * before stripping executable script tags. Returns HTML string of extracted anchors.
+ */
+export function extractScriptPayloads(html: string, baseUrl: string): string {
+  const extractedAnchors: string[] = [];
+
+  // 1. JSON-LD scripts (<script type="application/ld+json">)
+  const jsonLdMatches = html.match(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
+  for (const m of jsonLdMatches) {
+    try {
+      const jsonText = m.replace(/^<script[^>]*>/i, "").replace(/<\/script>$/i, "").trim();
+      if (!jsonText) continue;
+      const data = JSON.parse(jsonText);
+      const items = Array.isArray(data) ? data : (data["@graph"] || [data]);
+      for (const item of items) {
+        if (item && (item["@type"] === "JobPosting" || item["@type"]?.includes?.("JobPosting"))) {
+          const title = (item.title || "").trim();
+          const url = item.url || item.sameAs || item.directApplyUrl || "";
+          const company = item.hiringOrganization?.name || item.hiringOrganization?.legalName || "";
+          const loc = item.jobLocation?.address?.addressLocality || item.jobLocation?.name || "";
+          if (title) {
+            const href = url ? resolveHref(url, baseUrl) || url : baseUrl;
+            extractedAnchors.push(`<div><a href="${href}">${title} ${company ? "- " + company : ""} ${loc ? "(" + loc + ")" : ""}</a></div>`);
+          }
+        }
+      }
+    } catch {
+      // ignore JSON parse errors in malformed script tags
+    }
+  }
+
+  // 2. Framework script payloads (Next.js, Nuxt, inline JSON state scripts)
+  const scriptBlocks = html.match(/<script\b[^>]*>([\s\S]*?)<\/script>/gi) || [];
+  for (const s of scriptBlocks) {
+    if (/type=["']application\/ld\+json["']/i.test(s)) continue;
+    if (s.includes("title") || s.includes("openings") || s.includes("job") || s.includes("__NEXT_DATA__") || s.includes("self.__next_f")) {
+      const unescaped = s
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, "\\")
+        .replace(/\\u0026/g, "&")
+        .replace(/\\u002f/gi, "/");
+
+      const objMatches = unescaped.match(/\{[^{}]*?"title"\s*:\s*"([^"]+)"[^{}]*?\}/g) || [];
+      for (const obj of objMatches) {
+        const titleMatch = obj.match(/"title"\s*:\s*"([^"]+)"/);
+        const urlMatch = obj.match(/"(?:url|href|link|applicationLink|hostedUrl|jobUrl)"\s*:\s*"([^"]+)"/);
+        const companyMatch = obj.match(/"(?:company|company_name|companyName)"\s*:\s*"([^"]+)"/);
+        const locMatch = obj.match(/"(?:location|display_name)"\s*:\s*"([^"]+)"/);
+        if (titleMatch && urlMatch) {
+          const title = titleMatch[1].trim();
+          const rawUrl = urlMatch[1].trim();
+          const company = companyMatch ? companyMatch[1].trim() : "";
+          const loc = locMatch ? locMatch[1].trim() : "";
+          if (title && rawUrl && !rawUrl.endsWith(".css") && !rawUrl.endsWith(".js") && !rawUrl.endsWith(".png") && !rawUrl.endsWith(".jpg")) {
+            const href = resolveHref(rawUrl, baseUrl) || rawUrl;
+            extractedAnchors.push(`<div><a href="${href}">${title} ${company ? "- " + company : ""} ${loc ? "(" + loc + ")" : ""}</a></div>`);
+          }
+        }
+      }
+    }
+  }
+
+  return extractedAnchors.join("\n");
+}
+
+/**
  * HTML → flat text, with every anchor rewritten as a numbered citation
  * marker pair instead of the old one-sided `[link: href]` text marker. See
  * the module comment above for why this exists.
  */
 export function htmlToTextWithLinks(html: string, baseUrl: string): { text: string; links: PageLink[]; truncated: boolean } {
-  // Sanitize any pre-existing `[[7]]`-shaped text FIRST — this is what makes
-  // the citation set genuinely closed: page content can never forge a marker
-  // for the model to "cite" as if it were a real link.
-  let working = html
+  // Extract readable job listings and anchors from embedded JSON/script payloads
+  // before stripping executable script tags.
+  const scriptPayloadHtml = extractScriptPayloads(html, baseUrl);
+  let working = (html + "\n" + scriptPayloadHtml)
     .replace(LINK_TOKEN_RE, " ")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -350,8 +423,13 @@ export function stripReaderFrontmatter(body: string): string {
  * markup to the LLM risks it hallucinating postings out of boilerplate.
  * Returns the matched phrase (for the error message) or null. */
 function blockSignature(content: string): string | null {
-  const head = content.slice(0, 2000).toLowerCase();
-  return BLOCK_PAGE_SIGNS.find((sign) => head.includes(sign)) ?? null;
+  const head = content.slice(0, 3000).toLowerCase();
+  const matchedSign = BLOCK_PAGE_SIGNS.find((sign) => head.includes(sign));
+  if (matchedSign) return matchedSign;
+  if (/please enable (js|javascript)/i.test(head)) return "please enable js";
+  if (/captcha-delivery\.com/i.test(head)) return "captcha-delivery";
+  if (/challenge-platform/i.test(head)) return "challenge-platform";
+  return null;
 }
 
 async function fetchWithTimeout(url: string, headers: Record<string, string>, timeoutMs: number): Promise<Response> {

@@ -50,9 +50,32 @@ export default function ProfilePage() {
 
   useEffect(() => {
     if (data && !settings) {
-      setSettings(data);
-      setLoc(readLocations(data.filter_profile));
-      setComp(readCompensation(data.filter_profile));
+      const locPrefs = readLocations(data.filter_profile);
+      const compPrefs = readCompensation(data.filter_profile);
+      setLoc(locPrefs);
+      setComp(compPrefs);
+      // Materialize the structured fields from whatever the profile actually
+      // holds, at load rather than on first edit. A profile stored as prose
+      // only — written by an API predating these fields, or from before they
+      // existed — parses into the right tags for display, but nothing would
+      // carry them back on save: only updateLocations/updateComp write them
+      // into filter_profile. Without this, opening such a profile and pressing
+      // Update Profile stores the prose again and no structure, so the tags
+      // you can see never become the tags the gates read.
+      setSettings({
+        ...data,
+        filter_profile: {
+          ...data.filter_profile,
+          locations_include: locPrefs.include,
+          locations_exclude: locPrefs.exclude,
+          locations: serializeLocations(locPrefs),
+          compensation_min: compPrefs.min,
+          compensation_max: compPrefs.max,
+          compensation_currency: compPrefs.currency,
+          compensation_period: compPrefs.period,
+          compensation: formatCompRange(compPrefs.min, compPrefs.max, compPrefs.currency, compPrefs.period),
+        },
+      });
       // Default to editing if no profile content exists yet
       const hasContent = Boolean(
         data.filter_profile.roles ||

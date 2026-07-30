@@ -127,8 +127,15 @@ export function detectDroppedFields(
   received: { profile: FilterProfile; negativeKeywords: string },
 ): string[] {
   const dropped: string[] = [];
-  const lost = (key: keyof FilterProfile) =>
-    sent.profile[key] !== undefined && received.profile[key] === undefined;
+  // An empty list is not something the server can "drop" — it stores nothing
+  // for it by design. Only a value we actually sent counts, or every profile
+  // with no locations set would report a false skew.
+  const lost = (key: keyof FilterProfile) => {
+    const value = sent.profile[key];
+    if (value === undefined) return false;
+    if (Array.isArray(value) && value.length === 0) return false;
+    return received.profile[key] === undefined;
+  };
 
   if (lost("locations_include") || lost("locations_exclude")) dropped.push("location filters");
   if (lost("compensation_min") || lost("compensation_max")) dropped.push("pay range");

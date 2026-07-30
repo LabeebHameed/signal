@@ -57,8 +57,13 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import type { FilterProfile, Settings } from "../_shared/types.ts";
-import { FILTER_PROFILE_KEYS } from "../_shared/types.ts";
+import type { CompCurrency, CompPeriod, FilterProfile, Settings } from "../_shared/types.ts";
+import {
+  COMP_CURRENCIES,
+  COMP_PERIODS,
+  FILTER_PROFILE_KEYS,
+  TAGGED_PROFILE_KEYS,
+} from "../_shared/types.ts";
 import { resolveConfig } from "../_shared/config.ts";
 import { deriveLabel } from "../_shared/label.ts";
 import { expandProfile } from "../_shared/profile.ts";
@@ -76,6 +81,82 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json", ...CORS_HEADERS },
   });
+}
+
+/** Trim, drop blanks, and de-duplicate a tag list sent by the Profile page.
+ * Commas are stripped because the derived prose fields join on them — a tag
+ * containing one would re-split downstream into two the seeker never typed. */
+function sanitizeTagList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const cleaned = entry.replace(/[,;\n]/g, " ").trim().replace(/\s+/g, " ");
+    if (cleaned === "") continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(cleaned);
+  }
+  return out;
+}
+
+/** A positive finite integer, or undefined — a 0/negative/NaN bound is not a
+ * pay target, and storing it would switch the compensation gate on by
+ * accident. */
+function sanitizeAmount(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
+  return Math.round(value);
+}
+
+/** The prose form of the location preference, rebuilt server-side so the
+ * judge's view can never drift from what the Profile page shows. */
+function deriveLocations(include: string[], exclude: string[]): string {
+  const parts: string[] = [];
+  if (include.length > 0) parts.push(`Only: ${include.join(", ")}`);
+  if (exclude.length > 0) parts.push(`Never: ${exclude.join(", ")}`);
+  return parts.join(". ");
+}
+
+const CURRENCY_SYMBOLS: Record<CompCurrency, string> = {
+  USD: "$",
+  EUR: "€",
+  GBP: "£",
+  INR: "₹",
+};
+
+/** Mirrors the web app's formatCompact (web/src/lib/format.ts) — rupees use
+ * the lakh/crore scale because that is how Indian pay is actually quoted. */
+function compactAmount(amount: number, currency: CompCurrency): string {
+  const symbol = CURRENCY_SYMBOLS[currency];
+  const trim = (v: number) => v.toFixed(1).replace(/\.0$/, "");
+  if (currency === "INR") {
+    if (amount >= 10_000_000) return `${symbol}${trim(amount / 10_000_000)}Cr`;
+    if (amount >= 100_000) return `${symbol}${trim(amount / 100_000)}L`;
+    if (amount >= 1_000) return `${symbol}${trim(amount / 1_000)}K`;
+    return `${symbol}${amount}`;
+  }
+  if (amount >= 1_000_000) return `${symbol}${trim(amount / 1_000_000)}M`;
+  if (amount >= 1_000) return `${symbol}${trim(amount / 1_000)}K`;
+  return `${symbol}${amount}`;
+}
+
+/** The prose form of the pay range, rebuilt server-side for the same reason
+ * as deriveLocations. */
+function deriveCompensation(
+  min: number | undefined,
+  max: number | undefined,
+  currency: CompCurrency,
+  period: CompPeriod,
+): string {
+  const unit = period === "month" ? "/ mo" : "/ yr";
+  if (min !== undefined && max !== undefined) {
+    return `${compactAmount(min, currency)} – ${compactAmount(max, currency)} ${unit}`;
+  }
+  if (min !== undefined) return `From ${compactAmount(min, currency)} ${unit}`;
+  if (max !== undefined) return `Up to ${compactAmount(max, currency)} ${unit}`;
+  return "";
 }
 
 /** The settings shape the UI sees: no secret values, only whether they're set. */
@@ -232,10 +313,15 @@ Deno.serve(async (req: Request) => {
           "llm_model",
           "llm_base_url",
           "profile_input",
-          "negative_keywords",
         ]
       ) {
         if (typeof body[field] === "string") patch[field] = body[field].trim();
+      }
+      // Negative keywords are edited as tags like the profile lists, so they
+      // get the same per-value cleaning and de-duplication rather than a bare
+      // trim of the whole string.
+      if (typeof body.negative_keywords === "string") {
+        patch.negative_keywords = sanitizeTagList(body.negative_keywords.split(/[,;\n]/)).join(", ");
       }
       if (typeof body.company_filter_enabled === "boolean") {
         patch.company_filter_enabled = body.company_filter_enabled;
@@ -243,11 +329,62 @@ Deno.serve(async (req: Request) => {
       // Job filter: the profile is rebuilt from the known fields only (a PUT
       // replaces the whole profile — empty/omitted fields clear).
       if (typeof body.filter_profile === "object" && body.filter_profile !== null) {
+        const incoming = body.filter_profile as Record<string, unknown>;
         const profile: FilterProfile = {};
         for (const key of FILTER_PROFILE_KEYS) {
-          const value = (body.filter_profile as Record<string, unknown>)[key];
+          const value = incoming[key];
           if (typeof value === "string" && value.trim() !== "") profile[key] = value.trim();
         }
+
+        // Structured location/compensation preferences. `locations` and
+        // `compensation` are then DERIVED from them and overwrite whatever
+        // the client sent for those two keys, so the prose the judge reads is
+        // always the server's own rendering of the structured truth — a
+        // client that lags behind can't leave the two disagreeing.
+        const include = sanitizeTagList(incoming.locations_include);
+        const exclude = sanitizeTagList(incoming.locations_exclude);
+        if (include.length > 0) profile.locations_include = include;
+        if (exclude.length > 0) profile.locations_exclude = exclude;
+        const derivedLocations = deriveLocations(include, exclude);
+        if (derivedLocations !== "") profile.locations = derivedLocations;
+        else delete profile.locations;
+
+        const min = sanitizeAmount(incoming.compensation_min);
+        const max = sanitizeAmount(incoming.compensation_max);
+        const currency = COMP_CURRENCIES.includes(incoming.compensation_currency as CompCurrency)
+          ? incoming.compensation_currency as CompCurrency
+          : "USD";
+        const period = COMP_PERIODS.includes(incoming.compensation_period as CompPeriod)
+          ? incoming.compensation_period as CompPeriod
+          : "year";
+        if (min !== undefined) profile.compensation_min = min;
+        if (max !== undefined) profile.compensation_max = max;
+        if (min !== undefined || max !== undefined) {
+          profile.compensation_currency = currency;
+          profile.compensation_period = period;
+          profile.compensation = deriveCompensation(min, max, currency, period);
+        } else {
+          delete profile.compensation;
+        }
+
+        // Per-value AI/user provenance, kept only for values the profile
+        // still actually contains.
+        const rawProvenance = incoming.ai_generated;
+        if (typeof rawProvenance === "object" && rawProvenance !== null) {
+          const source = rawProvenance as Record<string, unknown>;
+          const provenance: NonNullable<FilterProfile["ai_generated"]> = {};
+          for (const key of TAGGED_PROFILE_KEYS) {
+            const claimed = sanitizeTagList(source[key]);
+            if (claimed.length === 0) continue;
+            const present = new Set(
+              (profile[key] ?? "").split(/[,;\n]/).map((s) => s.trim().toLowerCase()).filter(Boolean),
+            );
+            const kept = claimed.filter((v) => present.has(v.toLowerCase()));
+            if (kept.length > 0) provenance[key] = kept;
+          }
+          if (Object.keys(provenance).length > 0) profile.ai_generated = provenance;
+        }
+
         patch.filter_profile = profile;
       }
       // Secret fields: only overwrite when a non-empty value is sent

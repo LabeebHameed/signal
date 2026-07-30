@@ -27,6 +27,7 @@ import type {
   CompanyRow,
   CompanyVerdict,
   ExtractedPosting,
+  PostingVerdict,
   RuntimeConfig,
   Settings,
   WatchedPage,
@@ -42,6 +43,8 @@ import type { ExistingTitleRow, RenameCandidateRow, ResolvedLink } from "../_sha
 import { pickRenameMerges, resolvePostingLinks } from "../_shared/links.ts";
 import { judgePostings, keywordFilterVerdict, profileHasContent, titleMatchesKeywords } from "../_shared/judge.ts";
 import { matchesNegativeKeyword, negativeKeywordVerdict, parseNegativeKeywords } from "../_shared/negativeKeywords.ts";
+import { checkLocation, locationFilterVerdict } from "../_shared/locations.ts";
+import { checkCompensation, compensationFilterVerdict } from "../_shared/compensation.ts";
 import {
   companyLayerActive,
   dossierIsFresh,
@@ -88,19 +91,6 @@ const COMPANY_RESEARCH_PER_RUN = 3;
 // burns the invocation budget that healthy pages need.
 const DURABLE_FAILURE_THRESHOLD = 5;
 const DURABLE_FAILURE_RECHECK_MS = 3 * 60 * 60 * 1000;
-
-// Live link verification is the only step that spends network on a
-// per-POSTING basis (everything else in this file is per-page), so it's
-// budgeted three ways, mirroring company.ts's research retry pattern
-// (MAX_COMPANY_RESEARCH_FAILURES/researchRetryDue) and ats.ts's
-// DISCOVERY_BUDGET_MS wall-clock cap:
-//   - rows per page per run (matches MAX_NOTIFICATIONS_PER_PAGE_RUN, so in
-//     practice every freshly-matched posting is settled the same run);
-//   - a wall-clock deadline per page per run, since a walled site can leave
-//     every check hanging until timeout;
-//   - a lifetime attempt cap per posting, after which it settles into
-//     whatever its last outcome was (verified/indeterminate/mismatch/dead)
-//     rather than being retried forever.
 
 /**
  * A fetch failure that means "this site refuses automated access", as
@@ -195,6 +185,29 @@ function routeToNotify(companyName: string | null, layerActive: boolean): {
  * 'skipped', which also flushes any backlog left from when the profile had
  * content — though still via the company queue when that's active.
  */
+/**
+ * Run the three deterministic checks that make up the keyword filter, in the
+ * order that spends the least: title (a string the posting always has), then
+ * location, then pay. Returns the verdict to store for a rejected posting, or
+ * null when it survives and should go to the AI judge.
+ */
+function preFilterVerdict(
+  row: { title: string; location: string | null; compensation: string | null },
+  profile: RuntimeConfig["filterProfile"],
+): PostingVerdict | null {
+  if (!titleMatchesKeywords(row.title, profile)) {
+    return keywordFilterVerdict(row.title, profile);
+  }
+  const location = checkLocation(row.location, profile);
+  if (!location.ok && location.reason) {
+    return locationFilterVerdict(row.title, row.location, profile, location.reason);
+  }
+  if (!checkCompensation(row.compensation, profile).ok) {
+    return compensationFilterVerdict(row.title, row.compensation, profile);
+  }
+  return null;
+}
+
 async function screenPending(
   db: SupabaseClient,
   page: WatchedPage,
@@ -248,19 +261,28 @@ async function screenPending(
     return null;
   }
 
-  // Deterministic keyword gate, ahead of the LLM call: a title containing
-  // none of the profile's declared title_keywords is rejected outright, no
-  // LLM call spent — a hard backstop for cases the judge itself has gotten
-  // wrong even with full posting context in hand (see titleMatchesKeywords).
+  // The deterministic keyword filter, ahead of the LLM call. Three checks
+  // share this stage — and share the keyword_filtered flag, so the Workflow
+  // page attributes all of them to one node:
+  //   1. title keywords — a title containing none of the profile's declared
+  //      keywords is rejected outright, a hard backstop for scope calls the
+  //      judge has gotten wrong even with full context (titleMatchesKeywords).
+  //   2. locations — an excluded place, or a stated place outside the include
+  //      list, is rejected (locations.ts). An undisclosed location passes.
+  //   3. compensation — a posting whose stated pay provably tops out below
+  //      the seeker's floor is rejected (compensation.ts). Undisclosed or
+  //      unreadable pay passes, which is the overwhelming majority.
+  // Every one of them costs zero LLM calls.
   const forJudge: typeof rows = [];
   for (const row of openRows) {
-    if (titleMatchesKeywords(row.title, cfg.filterProfile)) {
+    const verdict = preFilterVerdict(row, cfg.filterProfile);
+    if (verdict === null) {
       forJudge.push(row);
       continue;
     }
     const { error: keywordError } = await db.from("postings").update({
       filter_status: "filtered",
-      filter_verdict: keywordFilterVerdict(row.title, cfg.filterProfile),
+      filter_verdict: verdict,
       keyword_filtered: true,
       pending_notify: false,
     }).eq("id", row.id);

@@ -171,7 +171,10 @@ const ROW_GAP = 150;
 const SIDE_GAP = 90;
 
 function sourceBadgeStat(p: WatchedPage, stats: { matched: number; filtered: number } | undefined): string {
-  if (p.last_error) return `⚠ ${p.last_error}`;
+  // Deliberately never shows last_error here — a raw provider/fetch error
+  // (e.g. an upstream LLM's JSON error payload) is noise on a pipeline
+  // overview. Clicking the node still surfaces it in the sidebar (see
+  // SourcePanel in WorkflowInspector.tsx); this node always reports outcome.
   if (!p.first_crawl_done) return "awaiting first crawl";
   const { matched = 0, filtered = 0 } = stats ?? {};
   return `${matched} matched · ${filtered} filtered`;

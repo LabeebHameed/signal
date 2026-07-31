@@ -37,7 +37,7 @@ import { type CardLink, extractCardLinks } from "./cards.ts";
 
 const MAX_CONTENT_CHARS = 100_000;
 
-export type FetchStrategy = "direct" | "direct-alt" | "proxy:pure" | "proxy:jina";
+export type FetchStrategy = "direct" | "direct-alt" | "direct-social" | "proxy:pure" | "proxy:jina" | "proxy:cors";
 
 /** One real hyperlink found on the fetched page — a closed citation set the
  * extraction model can index into but never fabricate an entry for. */
@@ -78,14 +78,18 @@ const CRAWLER_HEADERS: Record<string, string> = {
   "Accept": "text/html,*/*",
 };
 
+const SOCIAL_HEADERS: Record<string, string> = {
+  "User-Agent": "Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+};
+
 // Free, keyless reader proxies tried in order after direct attempts fail or
-// hit a block page — one line to add another. (jina.ai's Reader is
-// deliberately not here: even its rendering infra gets stopped by the same
-// Cloudflare/DataDome challenges these sites use, so it buys nothing extra
-// over the proxy below while adding a paid/rate-limited dependency.)
+// hit a block page — one line to add another.
 const PROXIES: Array<{ name: FetchStrategy; build: (url: string) => string }> = [
   { name: "proxy:pure", build: (url) => `https://pure.md/${url}` },
   { name: "proxy:jina", build: (url) => `https://r.jina.ai/${url}` },
+  { name: "proxy:cors", build: (url) => `https://corsproxy.io/?${encodeURIComponent(url)}` },
 ];
 
 // Phrases that mean "this is a block/challenge page, not real content" even
@@ -587,6 +591,7 @@ export async function fetchPageContent(
   const attempts: Array<{ name: FetchStrategy; run: () => Promise<AttemptOutcome> }> = [
     { name: "direct", run: () => fetchDirect(url, BROWSER_HEADERS, 15_000) },
     { name: "direct-alt", run: () => fetchDirect(url, CRAWLER_HEADERS, 15_000) },
+    { name: "direct-social", run: () => fetchDirect(url, SOCIAL_HEADERS, 15_000) },
     ...PROXIES.map((p) => ({ name: p.name, run: () => fetchViaProxy(p.build(url), url) })),
   ];
   // Try the strategy that worked last time first, so a healthy page pays

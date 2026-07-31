@@ -37,7 +37,7 @@ import { type CardLink, extractCardLinks } from "./cards.ts";
 
 const MAX_CONTENT_CHARS = 100_000;
 
-export type FetchStrategy = "direct" | "direct-alt" | "direct-social" | "proxy:pure" | "proxy:jina" | "proxy:cors";
+export type FetchStrategy = "direct" | "direct-alt" | "direct-social" | "proxy:pure" | "proxy:jina" | "proxy:cors" | "proxy:archive";
 
 /** One real hyperlink found on the fetched page — a closed citation set the
  * extraction model can index into but never fabricate an entry for. */
@@ -488,6 +488,32 @@ async function fetchViaProxy(
 }
 
 /**
+ * Wayback Machine snapshot fallback: for sites protected by heavy anti-bot walls
+ * (like DataDome on wellfound.com), archive.org's snapshot API provides the full,
+ * unblocked HTML body of the page.
+ */
+async function fetchViaWayback(pageUrl: string): Promise<AttemptOutcome> {
+  const apiUrl = `https://archive.org/wayback/available?url=${encodeURIComponent(pageUrl)}`;
+  const apiRes = await fetchWithTimeout(apiUrl, { "Accept": "application/json" }, 10_000);
+  if (!apiRes.ok) throw new Error(`Wayback API HTTP ${apiRes.status}`);
+  const data = (await apiRes.json()) as { archived_snapshots?: { closest?: { url?: string } } };
+  const snapUrl = data.archived_snapshots?.closest?.url;
+  if (!snapUrl) throw new Error("No archived snapshot available");
+
+  const res = await fetchWithTimeout(snapUrl, BROWSER_HEADERS, 15_000);
+  if (!res.ok) throw new Error(`Snapshot HTTP ${res.status}`);
+  let body = await res.text();
+  // Strip Wayback toolbar injection and /web/ timestamp prefixes from links
+  body = body.replace(/\/web\/\d+\/https?:\/\/[^\s"'>]+/gi, (m) => {
+    const orig = m.match(/https?:\/\/[^\s"'>]+/i)?.[0];
+    return orig ?? m;
+  });
+
+  const { text, links, truncated } = htmlToTextWithLinks(body, pageUrl);
+  return { content: text, truncated, links, linkBearing: true, cards: extractCardLinks(body, pageUrl) };
+}
+
+/**
  * Walk a lazy list of fetch strategies and return the best result, stopping
  * at the first fully-good one so a healthy page still pays for exactly one
  * request.
@@ -593,6 +619,7 @@ export async function fetchPageContent(
     { name: "direct-alt", run: () => fetchDirect(url, CRAWLER_HEADERS, 15_000) },
     { name: "direct-social", run: () => fetchDirect(url, SOCIAL_HEADERS, 15_000) },
     ...PROXIES.map((p) => ({ name: p.name, run: () => fetchViaProxy(p.build(url), url) })),
+    { name: "proxy:archive", run: () => fetchViaWayback(url) },
   ];
   // Try the strategy that worked last time first, so a healthy page pays
   // for exactly one attempt instead of re-discovering the winner every poll.

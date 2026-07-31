@@ -207,6 +207,9 @@ async function callAnthropic(cfg: LlmConfig, req: LlmJsonRequest): Promise<strin
     body: JSON.stringify({
       model: cfg.model,
       max_tokens: MAX_OUTPUT_TOKENS,
+      // Classification/extraction, not creative generation — pin out
+      // provider-default sampling variance (Anthropic defaults to 1.0).
+      temperature: 0,
       system: req.system,
       output_config: { format: { type: "json_schema", schema: req.schema } },
       messages: [{ role: "user", content: req.user }],
@@ -223,24 +226,49 @@ async function callAnthropic(cfg: LlmConfig, req: LlmJsonRequest): Promise<strin
   return text;
 }
 
+/** One attempt in callOpenAiCompatible's degrade ladder. Exported for testing
+ * the ordering without a network call. */
+export interface OpenAiAttempt {
+  response_format?: Record<string, unknown>;
+  temperature?: number;
+}
+
+/** Not every OpenAI-compatible provider supports json_schema response_format,
+ * and some (e.g. OpenAI's o1/o3 reasoning family) reject a custom temperature
+ * outright with a 400 — degrade json_schema → json_object → no format on
+ * 4xx, dropping temperature as the last resort. Classification/extraction has
+ * no need for sampling variance (this is the same reasoning as callAnthropic's
+ * fixed temperature: 0, and applies to extractPostings too, not just
+ * judgePostings — both callers share llmJson), so every attempt but the last
+ * asks for it; only a provider that rejects it outright falls through. */
+export function buildOpenAiAttempts(req: LlmJsonRequest): OpenAiAttempt[] {
+  return [
+    {
+      response_format: { type: "json_schema", json_schema: { name: req.schemaName, strict: true, schema: req.schema } },
+      temperature: 0,
+    },
+    { response_format: { type: "json_object" }, temperature: 0 },
+    { temperature: 0 },
+    {},
+  ];
+}
+
 async function callOpenAiCompatible(cfg: LlmConfig, req: LlmJsonRequest): Promise<string> {
   const messages = [
     { role: "system", content: req.system },
     { role: "user", content: req.user },
   ];
-  // Not every OpenAI-compatible provider supports json_schema response_format;
-  // degrade json_schema → json_object → none on 4xx.
-  const formats: Array<Record<string, unknown> | undefined> = [
-    { type: "json_schema", json_schema: { name: req.schemaName, strict: true, schema: req.schema } },
-    { type: "json_object" },
-    undefined,
-  ];
   let lastError = "";
-  for (const response_format of formats) {
+  for (const attempt of buildOpenAiAttempts(req)) {
     const res = await fetchWithRetry(`${cfg.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify({ model: cfg.model, messages, ...(response_format ? { response_format } : {}) }),
+      body: JSON.stringify({
+        model: cfg.model,
+        messages,
+        ...(attempt.response_format ? { response_format: attempt.response_format } : {}),
+        ...(attempt.temperature !== undefined ? { temperature: attempt.temperature } : {}),
+      }),
     }, "openai-compatible");
     if (res.ok) {
       const data = await res.json();

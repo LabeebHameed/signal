@@ -1,11 +1,54 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { ReactNode, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api";
-import { PostingStatusPill } from "../components/PostingStatus";
-import { useToast } from "../components/Toast";
-import { timeAgo } from "../lib/format";
-import { resolvePostingLink } from "../lib/parsePosting";
+import { RefreshCwIcon, TriangleAlertIcon } from "lucide-react";
+
+import { api } from "@/api";
+import { Page, PageHeader } from "@/components/PageShell";
+import { RECENT_POSTINGS_LIMIT, RecentPostings } from "@/components/RecentPostings";
+import { useToast } from "@/components/Toast";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { timeAgo } from "@/lib/format";
+import { cn } from "@/lib/utils";
+
+function StatCard({
+  value,
+  label,
+  to,
+  flag,
+  isLoading,
+}: {
+  value: ReactNode;
+  label: string;
+  to?: string;
+  flag?: string;
+  isLoading?: boolean;
+}) {
+  const body = (
+    <Card size="sm" className={cn("h-full", to && "transition-colors hover:bg-muted/40")}>
+      <CardContent className="grid gap-1">
+        {isLoading ? (
+          <Skeleton className="h-8 w-16" />
+        ) : (
+          <span className="font-heading text-2xl font-medium tracking-tight">{value}</span>
+        )}
+        <span className="text-sm text-muted-foreground">{label}</span>
+        {flag && <span className="text-xs text-destructive">{flag}</span>}
+      </CardContent>
+    </Card>
+  );
+
+  return to ? (
+    <Link to={to} className="block">
+      {body}
+    </Link>
+  ) : (
+    body
+  );
+}
 
 export default function Dashboard() {
   const queryClient = useQueryClient();
@@ -18,7 +61,7 @@ export default function Dashboard() {
   });
   const { data: recentPage, isLoading: postingsLoading } = useQuery({
     queryKey: ["postings", "recent"],
-    queryFn: () => api.listPostings({ limit: 8, sort: "first_seen_at", order: "desc" }),
+    queryFn: () => api.listPostings({ limit: RECENT_POSTINGS_LIMIT, sort: "first_seen_at", order: "desc" }),
   });
   // The most recent matches, used both for the "matches today" count and
   // (via .total) how many have ever matched — one query covers both.
@@ -86,90 +129,53 @@ export default function Dashboard() {
   const showSetupBanner = !loading && settings && (!llmConfigured || !telegramConfigured);
 
   return (
-    <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Dashboard</h1>
-          <p className="page-subtitle">
-            Last checked {timeAgo(lastChecked)}
-          </p>
-        </div>
-        <button disabled={polling} onClick={checkNow}>
-          {polling ? "Starting…" : "Check now"}
-        </button>
-      </header>
+    <Page>
+      <PageHeader
+        title="Dashboard"
+        description={`Last checked ${timeAgo(lastChecked)}`}
+        action={
+          <Button disabled={polling} onClick={checkNow}>
+            {polling ? <Spinner /> : <RefreshCwIcon />}
+            {polling ? "Starting…" : "Check now"}
+          </Button>
+        }
+      />
 
       {showSetupBanner && (
-        <section className="card banner-warning">
-          <p>
-            {!llmConfigured && "LLM isn't configured yet, so postings can't be extracted. "}
-            {!telegramConfigured && "Telegram isn't configured yet, so you won't get notifications. "}
-            <Link to="/settings">Finish setup in Settings →</Link>
-          </p>
-        </section>
+        <Card size="sm" className="ring-amber-500/30">
+          <CardContent className="flex items-start gap-3">
+            <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-amber-500" />
+            <p className="text-sm text-muted-foreground">
+              {!llmConfigured && "LLM isn't configured yet, so postings can't be extracted. "}
+              {!telegramConfigured && "Telegram isn't configured yet, so you won't get notifications. "}
+              <Link to="/settings" className="text-primary underline-offset-4 hover:underline">
+                Finish setup in Settings →
+              </Link>
+            </p>
+          </CardContent>
+        </Card>
       )}
 
-      <section className="stat-grid">
-        <Link to="/inbox" className="stat-card">
-          <span className="stat-value">{matchesToday}</span>
-          <span className="stat-label">Matches today</span>
-        </Link>
-        <Link to="/postings" className="stat-card">
-          <span className="stat-value">{pendingTotal}</span>
-          <span className="stat-label">Awaiting screening</span>
-        </Link>
-        <Link to="/sources" className="stat-card">
-          <span className="stat-value">
-            {activeCount}
-            <span className="stat-of">/{pages.length}</span>
-          </span>
-          <span className="stat-label">Active sources</span>
-          {errorCount > 0 && <span className="stat-flag error">{errorCount} with errors</span>}
-        </Link>
-        <span className="stat-card">
-          <span className="stat-value">{timeAgo(lastNotifiedAt)}</span>
-          <span className="stat-label">Last Telegram send</span>
-        </span>
-        <Link to="/postings" className="stat-card">
-          <span className="stat-value">{totalPostings}</span>
-          <span className="stat-label">Postings extracted</span>
-        </Link>
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <StatCard value={matchesToday} label="Matches today" to="/inbox" isLoading={loading} />
+        <StatCard value={pendingTotal} label="Awaiting screening" to="/postings" isLoading={loading} />
+        <StatCard
+          value={
+            <>
+              {activeCount}
+              <span className="text-muted-foreground">/{pages.length}</span>
+            </>
+          }
+          label="Active sources"
+          to="/sources"
+          flag={errorCount > 0 ? `${errorCount} with errors` : undefined}
+          isLoading={loading}
+        />
+        <StatCard value={timeAgo(lastNotifiedAt)} label="Last Telegram send" isLoading={loading} />
+        <StatCard value={totalPostings} label="Postings extracted" to="/postings" isLoading={loading} />
       </section>
 
-      <section className="card">
-        <div className="card-header">
-          <h2>Recent postings</h2>
-          <Link to="/postings" className="link-muted">
-            View all →
-          </Link>
-        </div>
-        <ul className="activity-list">
-          {recent.map((p) => {
-            const link = resolvePostingLink(p);
-            return (
-              <li key={p.id}>
-                <div className="activity-main">
-                  {link.isDirect && link.href ? (
-                    <a href={link.href} target="_blank" rel="noreferrer" className="activity-title">
-                      {p.title}
-                    </a>
-                  ) : (
-                    <span className="activity-title">{p.title}</span>
-                  )}
-                  <span className="muted">
-                    {p.company ?? "—"} · {p.watched_pages?.label || p.watched_pages?.url}
-                  </span>
-                </div>
-                <div className="activity-meta">
-                  <span className="muted">{timeAgo(p.first_seen_at)}</span>
-                  <PostingStatusPill posting={p} />
-                </div>
-              </li>
-            );
-          })}
-          {!loading && recent.length === 0 && <li className="empty">Nothing extracted yet.</li>}
-        </ul>
-      </section>
-    </div>
+      <RecentPostings postings={recent} isLoading={loading} />
+    </Page>
   );
 }

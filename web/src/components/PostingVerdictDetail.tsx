@@ -1,5 +1,8 @@
+import { BanIcon, CopyIcon, LinkIcon, ScaleIcon } from "lucide-react";
+
 import { CompanyPanel } from "./CompanyPanel";
 import type { Posting } from "../api";
+import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 
 const LINK_SOURCE_LABELS: Record<Posting["link_source"], string> = {
   unknown: "predates link provenance",
@@ -18,24 +21,61 @@ const LINK_SOURCE_LABELS: Record<Posting["link_source"], string> = {
 export function PostingVerdictDetail({ posting }: { posting: Posting }) {
   const v = posting.filter_verdict;
   return (
-    <div className="verdict-detail">
+    <div className="flex flex-col gap-3 py-1">
       {posting.duplicate_of && (
-        <p className="hint">Duplicate — a matching posting from another source was already notified.</p>
+        <Marker>
+          <MarkerIcon>
+            <CopyIcon />
+          </MarkerIcon>
+          <MarkerContent>
+            Duplicate — a matching posting from another source was already notified.
+          </MarkerContent>
+        </Marker>
       )}
-      {v && (
-        <>
-          {v.title_mismatch && <p className="verdict-title-mismatch">🚫 Off-target title: {v.title_mismatch}</p>}
-          {v.summary && <p>{v.summary}</p>}
-          <CompanyPanel posting={posting} />
-        </>
+
+      {v?.title_mismatch && (
+        <Marker>
+          <MarkerIcon>
+            <BanIcon className="text-destructive" />
+          </MarkerIcon>
+          <MarkerContent className="text-destructive">
+            Off-target title: {v.title_mismatch}
+          </MarkerContent>
+        </Marker>
       )}
+
+      {v?.summary && (
+        <Marker>
+          <MarkerIcon>
+            <ScaleIcon />
+          </MarkerIcon>
+          <MarkerContent className="text-foreground">{v.summary}</MarkerContent>
+        </Marker>
+      )}
+
+      {v && <CompanyPanel posting={posting} />}
+
+      <Marker variant="separator">
+        <MarkerContent>Link audit</MarkerContent>
+      </Marker>
+
       {/* Link audit trail — the raw stored URL and how it was obtained,
           regardless of what the View Posting button ends up showing
           (see resolvePostingLink in lib/parsePosting.ts). */}
-      <p className="hint">
-        Link: {posting.url ? <code>{posting.url}</code> : "none"} ({LINK_SOURCE_LABELS[posting.link_source]})
-        {posting.link_note && <> — {posting.link_note}</>}
-      </p>
+      <Marker>
+        <MarkerIcon>
+          <LinkIcon />
+        </MarkerIcon>
+        <MarkerContent>
+          {posting.url ? (
+            <code className="rounded bg-muted px-1 py-0.5 text-xs">{posting.url}</code>
+          ) : (
+            "none"
+          )}{" "}
+          ({LINK_SOURCE_LABELS[posting.link_source]})
+          {posting.link_note && <> — {posting.link_note}</>}
+        </MarkerContent>
+      </Marker>
     </div>
   );
 }

@@ -1,0 +1,258 @@
+/* Styling for the React Flow canvas on the Workflow page.
+ *
+ * These live in CSS rather than utility classes because React Flow renders
+ * the node/edge/control chrome itself — the selectors below are the only way
+ * to reach it. Everything resolves to the brand preset's own tokens, so the
+ * canvas restyles with the theme instead of pinning its own palette. */
+
+.wf-canvas {
+  --wf-blue: var(--color-sky-400);
+  --wf-amber: var(--color-amber-500);
+  --wf-teal: var(--primary);
+  --wf-purple: var(--color-violet-400);
+  --wf-gray: var(--muted-foreground);
+
+  width: 100%;
+  height: 78vh;
+  min-height: 520px;
+}
+
+.wf-canvas .react-flow__attribution {
+  display: none;
+}
+
+.wf-canvas-bg {
+  background: var(--card);
+}
+
+.wf-canvas .react-flow__controls {
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: none;
+}
+
+.wf-canvas .react-flow__controls-button {
+  background: var(--popover);
+  border-bottom: 1px solid var(--border);
+  color: var(--popover-foreground);
+}
+
+.wf-canvas .react-flow__controls-button:hover {
+  background: var(--muted);
+}
+
+.wf-canvas .react-flow__controls-button svg {
+  fill: currentColor;
+}
+
+.wf-zoom-readout {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 5;
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+
+.wf-handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---------- Nodes ---------- */
+
+.wf-node {
+  display: block;
+  width: 220px;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.wf-node:hover {
+  border-color: var(--primary);
+}
+
+.wf-node.selected {
+  border-color: var(--primary);
+  background: color-mix(in oklch, var(--primary) 14%, transparent);
+}
+
+.wf-node.disabled {
+  opacity: 0.55;
+}
+
+.wf-node-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.wf-node-icon {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wf-node-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.wf-node-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-node-subtitle {
+  font-size: 0.72rem;
+  color: var(--muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-node-stat {
+  margin-top: 0.55rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.72rem;
+  color: var(--muted-foreground);
+}
+
+.wf-badge {
+  flex-shrink: 0;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--radius-sm);
+}
+
+/* One tone per pipeline stage, applied to the node icon, its badge, the
+ * funnel bar, and the legend dot so a stage reads the same colour wherever
+ * it appears. */
+.wf-node-icon-blue,
+.wf-badge-blue {
+  background: color-mix(in oklch, var(--wf-blue) 16%, transparent);
+  color: var(--wf-blue);
+}
+
+.wf-node-icon-amber,
+.wf-badge-amber {
+  background: color-mix(in oklch, var(--wf-amber) 16%, transparent);
+  color: var(--wf-amber);
+}
+
+.wf-node-icon-teal,
+.wf-badge-teal {
+  background: color-mix(in oklch, var(--wf-teal) 16%, transparent);
+  color: var(--wf-teal);
+}
+
+.wf-node-icon-purple,
+.wf-badge-purple {
+  background: color-mix(in oklch, var(--wf-purple) 16%, transparent);
+  color: var(--wf-purple);
+}
+
+.wf-node-icon-gray,
+.wf-badge-gray {
+  background: color-mix(in oklch, var(--wf-gray) 16%, transparent);
+  color: var(--wf-gray);
+}
+
+/* ---------- Edges ---------- */
+
+.wf-edge-path {
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+
+.wf-edge-label {
+  position: absolute;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.wf-edge-label-ok {
+  background: color-mix(in oklch, var(--primary) 16%, transparent);
+  color: var(--primary);
+}
+
+.wf-edge-label-skip {
+  background: color-mix(in oklch, var(--destructive) 16%, transparent);
+  color: var(--destructive);
+}
+
+/* ---------- Funnel + legend (inspector sidebar) ---------- */
+
+.wf-funnel-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--muted);
+  overflow: hidden;
+}
+
+.wf-funnel-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+}
+
+.wf-funnel-bar-blue,
+.wf-legend-dot-blue {
+  background: var(--wf-blue);
+}
+
+.wf-funnel-bar-amber,
+.wf-legend-dot-amber {
+  background: var(--wf-amber);
+}
+
+.wf-funnel-bar-teal,
+.wf-legend-dot-teal {
+  background: var(--wf-teal);
+}
+
+.wf-funnel-bar-purple,
+.wf-legend-dot-purple {
+  background: var(--wf-purple);
+}
+
+.wf-funnel-bar-gray,
+.wf-legend-dot-gray {
+  background: var(--wf-gray);
+}
+
+/* The funnel/legend render outside .wf-canvas, so they need the tone
+ * variables defined on their own subtree too. */
+.wf-funnel,
+.wf-legend {
+  --wf-blue: var(--color-sky-400);
+  --wf-amber: var(--color-amber-500);
+  --wf-teal: var(--primary);
+  --wf-purple: var(--color-violet-400);
+  --wf-gray: var(--muted-foreground);
+}

@@ -1,6 +1,13 @@
 import { useState } from "react";
-import type { Posting } from "../api";
-import { parseJobDetails } from "../lib/parsePosting";
+import { ExternalLinkIcon } from "lucide-react";
+
+import type { Posting } from "@/api";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { parseJobDetails } from "@/lib/parsePosting";
 
 interface JobCardProps {
   posting: Posting;
@@ -24,98 +31,79 @@ export function JobCard({ posting }: JobCardProps) {
   const faviconUrl = websiteDomain ? `https://www.google.com/s2/favicons?domain=${websiteDomain}&sz=128` : null;
 
   return (
-    <article className="job-card">
-      {/* Top Header Row: Logo Avatar + Source Site Name */}
-      <div className="job-card-header">
-        <div className="job-card-avatar">
-          {faviconUrl && showFavicon ? (
-            <img
-              src={faviconUrl}
-              alt={`${companyName} logo`}
-              onError={() => setShowFavicon(false)}
-            />
-          ) : (
-            <span className="job-card-avatar-fallback">
+    <Card size="sm" className="h-full">
+      <CardHeader className="gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <Avatar className="size-9 rounded-lg">
+            {faviconUrl && showFavicon && (
+              <AvatarImage
+                src={faviconUrl}
+                alt={`${companyName} logo`}
+                onError={() => setShowFavicon(false)}
+              />
+            )}
+            <AvatarFallback className="rounded-lg">
               {companyName.charAt(0).toUpperCase()}
-            </span>
-          )}
-        </div>
-        <div className="job-card-header-right">
-          <span className="job-card-source">{sourceSiteName}</span>
-        </div>
-      </div>
-
-      {/* Company Name & Time */}
-      <div className="job-card-meta">
-        <span className="job-card-company-name">{companyName}</span>
-        <span className="job-card-time">{timeText}</span>
-      </div>
-
-      {/* Clean Job Title — only ever links to the posting's OWN url, never
-          to the source-listing fallback (that would misrepresent the link
-          as this specific posting). */}
-      <h3 className="job-card-title">
-        {link.isDirect && link.href ? (
-          <a href={link.href} target="_blank" rel="noreferrer">
-            {cleanTitle}
-          </a>
-        ) : (
-          cleanTitle
-        )}
-      </h3>
-
-      {/* Pill Tags */}
-      {tags.length > 0 && (
-        <div className="job-card-tags">
-          {tags.map((tag) => (
-            <span key={tag} className="job-card-tag">
-              {tag}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Horizontal Divider Line */}
-      <hr className="job-card-divider" />
-
-      {/* Footer: Compensation & Location (Left), View Posting Button (Right) */}
-      <div className="job-card-footer">
-        <div className="job-card-footer-left">
-          <div className="job-card-comp">{compensationText}</div>
-          <div className="job-card-loc">{locationText}</div>
+            </AvatarFallback>
+          </Avatar>
+          <span className="text-xs text-muted-foreground">{sourceSiteName}</span>
         </div>
 
-        <div className="job-card-footer-right">
-          {link.href ? (
-            <a
-              href={link.href}
-              target="_blank"
-              rel="noreferrer"
-              className={`job-card-view-btn${link.isDirect ? "" : " indirect"}`}
-              title={link.tooltip ?? undefined}
-            >
-              {link.label}
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                style={{ marginLeft: "5px", verticalAlign: "middle" }}
-              >
-                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                <polyline points="15 3 21 3 21 9" />
-                <line x1="10" y1="14" x2="21" y2="3" />
-              </svg>
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="truncate text-sm font-medium">{companyName}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">{timeText}</span>
+        </div>
+      </CardHeader>
+
+      <CardContent className="grid gap-3">
+        {/* Only ever links to the posting's OWN url, never to the
+            source-listing fallback (that would misrepresent the link as
+            this specific posting). */}
+        <h3 className="font-heading text-base font-medium">
+          {link.isDirect && link.href ? (
+            <a href={link.href} target="_blank" rel="noreferrer" className="hover:underline">
+              {cleanTitle}
             </a>
           ) : (
-            <span className="job-card-view-btn disabled">{link.label}</span>
+            cleanTitle
           )}
+        </h3>
+
+        {tags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {tags.map((tag) => (
+              <Badge key={tag} variant="secondary" className="bg-muted text-muted-foreground">
+                {tag}
+              </Badge>
+            ))}
+          </div>
+        )}
+      </CardContent>
+
+      <Separator />
+
+      <CardFooter className="mt-auto items-end justify-between gap-3">
+        <div className="grid gap-0.5 text-sm">
+          <span className="font-medium">{compensationText}</span>
+          <span className="text-muted-foreground">{locationText}</span>
         </div>
-      </div>
-    </article>
+
+        {link.href ? (
+          <Button
+            variant={link.isDirect ? "default" : "outline"}
+            size="sm"
+            title={link.tooltip ?? undefined}
+            render={<a href={link.href} target="_blank" rel="noreferrer" />}
+          >
+            {link.label}
+            <ExternalLinkIcon />
+          </Button>
+        ) : (
+          <Button variant="outline" size="sm" disabled>
+            {link.label}
+          </Button>
+        )}
+      </CardFooter>
+    </Card>
   );
 }

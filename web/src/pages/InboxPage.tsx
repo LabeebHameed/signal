@@ -1,9 +1,52 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { api, profileHasContent } from "../api";
-import { JobCard } from "../components/JobCard";
+import { InboxIcon, InfoIcon } from "lucide-react";
+
+import { api, profileHasContent } from "@/api";
+import { JobCard } from "@/components/JobCard";
+import { Page, PageHeader } from "@/components/PageShell";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 
 const PAGE_SIZE = 20;
+
+function JobCardSkeleton() {
+  return (
+    <Card size="sm" className="h-full">
+      <CardContent className="grid gap-4">
+        <div className="flex items-center justify-between gap-3">
+          <Skeleton className="size-9 rounded-lg" />
+          <Skeleton className="h-3 w-20" />
+        </div>
+        <div className="grid gap-2">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-5 w-3/4" />
+        </div>
+        <div className="flex gap-1.5">
+          <Skeleton className="h-5 w-16 rounded-4xl" />
+          <Skeleton className="h-5 w-20 rounded-4xl" />
+        </div>
+        <Skeleton className="h-px w-full rounded-none" />
+        <div className="flex items-end justify-between gap-3">
+          <div className="grid gap-1.5">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-3 w-20" />
+          </div>
+          <Skeleton className="h-8 w-28 rounded-4xl" />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 /**
  * The payoff surface: only the postings that came out of the filter, as
@@ -30,44 +73,77 @@ export default function InboxPage() {
   const noProfile = Boolean(settings) && !profileHasContent(settings!.filter_profile);
 
   return (
-    <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Inbox</h1>
-          <p className="page-subtitle">{total} posting{total === 1 ? "" : "s"} that fit your profile.</p>
-        </div>
-      </header>
+    <Page>
+      <PageHeader
+        title="Inbox"
+        description={`${total} posting${total === 1 ? "" : "s"} that fit your profile.`}
+      />
 
       {noProfile && (
-        <p className="hint banner">
-          No profile yet, so every new posting is notified as-is. Describe what you're looking for on the{" "}
-          <Link to="/profile">Profile page</Link>.
+        <Card size="sm">
+          <CardContent className="flex items-start gap-3">
+            <InfoIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">
+              No profile yet, so every new posting is notified as-is. Describe what you're looking for on the{" "}
+              <Link to="/profile" className="text-primary underline-offset-4 hover:underline">
+                Profile page
+              </Link>
+              .
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {error && (
+        <p className="text-sm text-destructive">
+          {error instanceof Error ? error.message : String(error)}
         </p>
       )}
-      {error && <p className="error">{error instanceof Error ? error.message : String(error)}</p>}
 
-      <div className="match-grid">
-        {items.map((p) => (
-          <JobCard key={p.id} posting={p} />
-        ))}
-      </div>
-
-      {items.length === 0 && !isLoading && !noProfile && (
-        <section className="card">
-          <p className="empty">
-            No matches yet. They appear here as soon as a new posting fits the profile you described on the{" "}
-            <Link to="/profile">Profile page</Link>.
-          </p>
-        </section>
+      {isLoading ? (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 min-[2000px]:grid-cols-5">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <JobCardSkeleton key={i} />
+          ))}
+        </div>
+      ) : items.length > 0 ? (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 min-[2000px]:grid-cols-5">
+          {items.map((p) => (
+            <JobCard key={p.id} posting={p} />
+          ))}
+        </div>
+      ) : (
+        !noProfile && (
+          <Card>
+            <CardContent>
+              <Empty>
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <InboxIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>No matches yet</EmptyTitle>
+                  <EmptyDescription>
+                    They appear here as soon as a new posting fits the profile you described on the{" "}
+                    <Link to="/profile" className="text-primary underline-offset-4 hover:underline">
+                      Profile page
+                    </Link>
+                    .
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            </CardContent>
+          </Card>
+        )
       )}
 
       {hasNextPage && (
-        <p className="load-more">
-          <button className="secondary" disabled={isFetchingNextPage} onClick={() => fetchNextPage()}>
+        <div className="flex justify-center">
+          <Button variant="outline" disabled={isFetchingNextPage} onClick={() => fetchNextPage()}>
+            {isFetchingNextPage && <Spinner />}
             {isFetchingNextPage ? "Loading…" : `Load more (${total - items.length} remaining)`}
-          </button>
-        </p>
+          </Button>
+        </div>
       )}
-    </div>
+    </Page>
   );
 }

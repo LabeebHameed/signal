@@ -13,8 +13,24 @@
 
 import { KeyboardEvent, useEffect, useRef, useState } from "react";
 import { isAiValue, normalizeTag, tagKey } from "../lib/profileTags";
+import { cn } from "@/lib/utils";
 
 export type TagTone = "neutral" | "negative" | "include" | "exclude";
+
+/** What the tag DOES, mapped onto brand tokens. Provenance (AI vs. the
+ * seeker's own typing) is layered on top as a modifier, not a fifth tone.
+ *
+ * These sit *inside* the field, whose own surface is `bg-input/30`, so each
+ * tone is weighted to stay clearly readable as a separate chip rather than
+ * blending into the box behind it. */
+const TONE_CLASSES: Record<TagTone, string> = {
+  neutral: "bg-foreground/20 text-foreground",
+  negative: "bg-destructive/25 text-destructive",
+  // Not `text-primary`: the brand's emerald is a deep shade that goes
+  // dark-on-dark once it also tints the chip's own background.
+  include: "bg-emerald-500/20 text-emerald-400",
+  exclude: "bg-destructive/25 text-destructive",
+};
 
 interface TagFieldProps {
   values: string[];
@@ -158,7 +174,7 @@ export default function TagField({
 
   return (
     <div
-      className={`tag-field tag-field-${tone}`}
+      className="flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-4xl border border-input bg-input/30 px-2.5 py-1.5 text-sm transition-colors focus-within:border-ring"
       onMouseDown={(e) => {
         // Clicking the padding focuses the input; clicking a tag or its
         // remove button must keep its own handler.
@@ -173,12 +189,13 @@ export default function TagField({
         return (
           <span
             key={`${tagKey(value)}-${index}`}
-            className={[
-              "tag-chip",
-              ai ? "tag-chip-ai" : "",
-              selected === index ? "is-selected" : "",
-              duplicate === index ? "is-duplicate" : "",
-            ].filter(Boolean).join(" ")}
+            className={cn(
+              "flex h-[calc(--spacing(5.5))] cursor-pointer items-center gap-1 rounded-4xl px-2 text-xs font-medium whitespace-nowrap outline-none",
+              TONE_CLASSES[tone],
+              ai && "ring-1 ring-current/30 ring-inset",
+              selected === index && "ring-2 ring-ring",
+              duplicate === index && "animate-pulse ring-2 ring-amber-500",
+            )}
             tabIndex={-1}
             role="button"
             aria-label={`${ai ? "AI-suggested" : "You added"}: ${value}. Press Backspace to edit, Delete to remove.`}
@@ -193,7 +210,7 @@ export default function TagField({
           >
             {ai && (
               <svg
-                className="tag-chip-spark"
+                className="shrink-0 opacity-70"
                 width="10"
                 height="10"
                 viewBox="0 0 24 24"
@@ -203,10 +220,10 @@ export default function TagField({
                 <path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3Z" />
               </svg>
             )}
-            <span className="tag-chip-label">{value}</span>
+            <span>{value}</span>
             <button
               type="button"
-              className="tag-chip-remove"
+              className="-mr-1 flex size-4 shrink-0 items-center justify-center rounded-full opacity-50 transition-opacity hover:opacity-100"
               aria-label={`Remove ${value}`}
               tabIndex={-1}
               onMouseDown={(e) => e.preventDefault()}
@@ -226,7 +243,7 @@ export default function TagField({
         ref={inputRef}
         id={id}
         aria-describedby={describedBy}
-        className="tag-field-input"
+        className="h-6 min-w-24 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
         value={draft}
         placeholder={values.length === 0 ? placeholder : ""}
         onChange={(e) => setDraft(e.target.value)}

@@ -1,10 +1,36 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useEffect, useState } from "react";
-import { api, WatchedPage } from "../api";
-import { StatusPill } from "../components/StatusPill";
-import { useToast } from "../components/Toast";
-import { Toggle } from "../components/Toggle";
-import { isBlockedSourceError, isLinkQualityWarning, timeAgo, truncate } from "../lib/format";
+import { RefreshCwIcon, Trash2Icon } from "lucide-react";
+
+import { api, WatchedPage } from "@/api";
+import { useConfirm } from "@/components/ConfirmDialog";
+import { Page, PageHeader } from "@/components/PageShell";
+import { StatusPill } from "@/components/StatusPill";
+import { useToast } from "@/components/Toast";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import { isBlockedSourceError, isLinkQualityWarning, timeAgo, truncate } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 // A snapshot of which pages a "Check now" run covers and when it started —
 // used to show a live "checking…" state per row instead of the previous
@@ -17,11 +43,39 @@ interface PendingCheck {
 const FAST_POLL_MS = 2500;
 const NORMAL_POLL_MS = 20_000;
 const CHECK_TIMEOUT_MS = 3 * 60_000;
+const COLUMN_COUNT = 5;
 
 function isPageChecking(p: WatchedPage, pendingCheck: PendingCheck | null): boolean {
   if (!pendingCheck || !pendingCheck.ids.has(p.id)) return false;
   if (!p.last_checked_at) return true;
   return new Date(p.last_checked_at).getTime() < pendingCheck.startedAt;
+}
+
+function SourceStatus({ page, checking }: { page: WatchedPage; checking: boolean }) {
+  if (checking) return <StatusPill tone="checking">checking now</StatusPill>;
+  if (isBlockedSourceError(page.last_error)) {
+    return (
+      <StatusPill tone="pending" title={page.last_error ?? undefined}>
+        blocked by site
+      </StatusPill>
+    );
+  }
+  if (isLinkQualityWarning(page.last_error)) {
+    return (
+      <StatusPill tone="pending" title={page.last_error ?? undefined}>
+        links unreliable
+      </StatusPill>
+    );
+  }
+  if (page.last_error) {
+    return (
+      <StatusPill tone="error" title={page.last_error}>
+        {truncate(page.last_error, 44)}
+      </StatusPill>
+    );
+  }
+  if (page.first_crawl_done) return <StatusPill tone="ok">ok</StatusPill>;
+  return <StatusPill tone="pending">pending first crawl</StatusPill>;
 }
 
 export default function Sources() {
@@ -37,6 +91,7 @@ export default function Sources() {
   const [bulkText, setBulkText] = useState("");
   const [adding, setAdding] = useState(false);
   const toast = useToast();
+  const confirm = useConfirm();
 
   // Once every page in the run has a fresher last_checked_at than when the
   // run started, the run is done — drop back to normal polling.
@@ -81,8 +136,15 @@ export default function Sources() {
     });
   };
 
-  const removePage = (page: WatchedPage) => {
-    if (!confirm(`Stop watching ${page.label || page.url}?`)) return;
+  const removePage = async (page: WatchedPage) => {
+    const ok = await confirm({
+      title: "Stop watching this source?",
+      description: `${page.label || page.url} will no longer be checked for new postings. Postings already extracted from it are kept.`,
+      confirmLabel: "Stop watching",
+      destructive: true,
+    });
+    if (!ok) return;
+
     const previous = pages;
     queryClient.setQueryData<WatchedPage[]>(["pages"], (prev) => prev?.filter((p) => p.id !== page.id));
     api.deletePage(page.id).catch((e) => {
@@ -115,101 +177,138 @@ export default function Sources() {
   };
 
   return (
-    <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Sources</h1>
-          <p className="page-subtitle">Career pages Signal checks for new postings.</p>
-        </div>
-        <button disabled={Boolean(pendingCheck)} onClick={checkNow}>
-          {pendingCheck ? "Checking…" : "Check now"}
-        </button>
-      </header>
+    <Page>
+      <PageHeader
+        title="Sources"
+        description="Career pages Signal checks for new postings."
+        action={
+          <Button disabled={Boolean(pendingCheck)} onClick={checkNow}>
+            {pendingCheck ? <Spinner /> : <RefreshCwIcon />}
+            {pendingCheck ? "Checking…" : "Check now"}
+          </Button>
+        }
+      />
 
-      <section className="card">
-        <form className="add-form" onSubmit={addPages}>
-          <textarea
-            value={bulkText}
-            onChange={(e) => setBulkText(e.target.value)}
-            placeholder={"Paste one or more career page URLs, one per line:\nhttps://dribbble.com/jobs\nhttps://jobs.lever.co/plaid"}
-            rows={3}
-          />
-          <button type="submit" disabled={adding}>
-            {adding ? "Adding…" : "Watch pages"}
-          </button>
-        </form>
-        <p className="hint">
-          Already-watched URLs are skipped; new ones are labeled from their site (e.g. dribbble.com → Dribbble).
-        </p>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>Add sources</CardTitle>
+          <CardDescription>Paste one or more career page URLs, one per line.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={addPages} className="flex flex-col gap-6">
+            <Field>
+              <FieldLabel htmlFor="sources-bulk">Career page URLs</FieldLabel>
+              <Textarea
+                id="sources-bulk"
+                value={bulkText}
+                onChange={(e) => setBulkText(e.target.value)}
+                placeholder={"https://dribbble.com/jobs\nhttps://jobs.lever.co/plaid"}
+                rows={3}
+              />
+              <FieldDescription>
+                Already-watched URLs are skipped; new ones are labeled from their site (e.g. dribbble.com →
+                Dribbble).
+              </FieldDescription>
+            </Field>
+            <div className="flex justify-end">
+              <Button type="submit" disabled={adding}>
+                {adding && <Spinner />}
+                {adding ? "Adding…" : "Watch pages"}
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
 
-      <section className="card">
-        {error && <p className="error">{error instanceof Error ? error.message : String(error)}</p>}
-        <table>
-          <thead>
-            <tr>
-              <th>Page</th>
-              <th>Active</th>
-              <th>Last checked</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {pages.map((p) => {
-              const checking = isPageChecking(p, pendingCheck);
-              return (
-                <tr key={p.id} className={p.active ? "" : "inactive"}>
-                  <td>
-                    <a href={p.url} target="_blank" rel="noreferrer">
-                      {p.label || p.url}
-                    </a>
-                  </td>
-                  <td>
-                    <Toggle checked={p.active} onChange={() => toggleActive(p)} />
-                  </td>
-                  <td className={checking ? "checking-text" : "muted"}>
-                    {checking ? "Checking…" : timeAgo(p.last_checked_at)}
-                  </td>
-                  <td>
-                    {checking ? (
-                      <StatusPill tone="checking">checking now</StatusPill>
-                    ) : isBlockedSourceError(p.last_error) ? (
-                      <StatusPill tone="pending" title={p.last_error ?? undefined}>
-                        blocked by site
-                      </StatusPill>
-                    ) : isLinkQualityWarning(p.last_error) ? (
-                      <StatusPill tone="pending" title={p.last_error ?? undefined}>
-                        links unreliable
-                      </StatusPill>
-                    ) : p.last_error ? (
-                      <StatusPill tone="error" title={p.last_error}>
-                        {truncate(p.last_error, 44)}
-                      </StatusPill>
-                    ) : p.first_crawl_done ? (
-                      <StatusPill tone="ok">ok</StatusPill>
-                    ) : (
-                      <StatusPill tone="pending">pending first crawl</StatusPill>
-                    )}
-                  </td>
-                  <td>
-                    <button className="danger" onClick={() => removePage(p)}>
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-            {!isLoading && pages.length === 0 && (
-              <tr>
-                <td colSpan={5} className="empty">
-                  No pages yet — add a careers page above.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </section>
-    </div>
+      <Card>
+        <CardContent className="pt-0">
+          {error && (
+            <p className="pb-4 text-sm text-destructive">
+              {error instanceof Error ? error.message : String(error)}
+            </p>
+          )}
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Page</TableHead>
+                <TableHead>Active</TableHead>
+                <TableHead>Last checked</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isLoading &&
+                Array.from({ length: 3 }).map((_, i) => (
+                  <TableRow key={i} className="hover:bg-transparent">
+                    {Array.from({ length: COLUMN_COUNT }).map((__, j) => (
+                      <TableCell key={j} className="py-3.5">
+                        <Skeleton className={cn("h-4", j === 0 ? "w-48" : "w-16")} />
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+
+              {pages.map((p) => {
+                const checking = isPageChecking(p, pendingCheck);
+                return (
+                  <TableRow key={p.id} className={cn(!p.active && "opacity-50")}>
+                    <TableCell className="w-full max-w-0 py-3.5">
+                      <a
+                        href={p.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block truncate font-medium hover:underline"
+                      >
+                        {p.label || p.url}
+                      </a>
+                    </TableCell>
+                    <TableCell className="py-3.5">
+                      <Switch
+                        checked={p.active}
+                        onCheckedChange={() => toggleActive(p)}
+                        aria-label={`${p.active ? "Pause" : "Resume"} ${p.label || p.url}`}
+                      />
+                    </TableCell>
+                    <TableCell
+                      className={cn("py-3.5", checking ? "text-sky-400" : "text-muted-foreground")}
+                    >
+                      {checking ? "Checking…" : timeAgo(p.last_checked_at)}
+                    </TableCell>
+                    <TableCell className="py-3.5">
+                      <SourceStatus page={p} checking={checking} />
+                    </TableCell>
+                    <TableCell className="py-3.5 text-right">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-muted-foreground hover:text-destructive"
+                        aria-label={`Remove ${p.label || p.url}`}
+                        onClick={() => removePage(p)}
+                      >
+                        <Trash2Icon />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+
+              {!isLoading && pages.length === 0 && (
+                <TableRow className="hover:bg-transparent">
+                  <TableCell colSpan={COLUMN_COUNT}>
+                    <Empty>
+                      <EmptyHeader>
+                        <EmptyTitle>No sources yet</EmptyTitle>
+                        <EmptyDescription>Add a careers page above to start watching it.</EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </Page>
   );
 }

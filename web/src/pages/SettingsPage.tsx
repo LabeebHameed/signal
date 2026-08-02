@@ -1,7 +1,67 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useEffect, useState } from "react";
-import { api, Settings } from "../api";
-import { useToast } from "../components/Toast";
+import { CheckCircle2Icon } from "lucide-react";
+
+import { api, Settings } from "@/api";
+import { useConfirm } from "@/components/ConfirmDialog";
+import { Page, PageHeader } from "@/components/PageShell";
+import { useToast } from "@/components/Toast";
+import { SelectCombobox, type SelectOption } from "@/components/ui-ext/select-combobox";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
+
+const PROVIDER_OPTIONS: SelectOption[] = [
+  { value: "anthropic", label: "Anthropic" },
+  {
+    value: "openai-compatible",
+    label: "OpenAI-compatible",
+    hint: "OpenAI, Gemini, Groq, OpenRouter, Ollama…",
+  },
+];
+
+function SettingsSkeleton() {
+  return (
+    <Page>
+      <PageHeader title="Settings" />
+      {Array.from({ length: 2 }).map((_, i) => (
+        <Card key={i}>
+          <CardHeader>
+            <Skeleton className="h-5 w-40" />
+            <Skeleton className="h-4 w-64" />
+          </CardHeader>
+          <CardContent>
+            <FieldGroup>
+              {Array.from({ length: 2 }).map((__, j) => (
+                <div key={j} className="grid gap-3">
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-9 w-full rounded-4xl" />
+                  <Skeleton className="h-3 w-56" />
+                </div>
+              ))}
+            </FieldGroup>
+          </CardContent>
+        </Card>
+      ))}
+    </Page>
+  );
+}
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
@@ -27,16 +87,19 @@ export default function SettingsPage() {
   });
   const [clearing, setClearing] = useState(false);
   const toast = useToast();
+  const confirm = useConfirm();
 
   const clearPostings = async () => {
-    if (
-      !confirm(
-        "Clear all postings? This deletes every scraped posting and its screening/company history, and resets " +
-          "every source so the next check re-fetches and re-extracts from scratch. This can't be undone.",
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: "Clear all postings?",
+      description:
+        "This deletes every scraped posting and its screening/company history, and resets every source so the " +
+        "next check re-fetches and re-extracts from scratch. This can't be undone.",
+      confirmLabel: "Clear all postings",
+      destructive: true,
+    });
+    if (!ok) return;
+
     setClearing(true);
     try {
       const res = await api.clearPostings();
@@ -90,166 +153,219 @@ export default function SettingsPage() {
 
   if (loadError && !settings) {
     return (
-      <div className="page">
-        <header className="page-header">
-          <h1>Settings</h1>
-        </header>
-        <p className="error">{loadError instanceof Error ? loadError.message : String(loadError)}</p>
-      </div>
+      <Page>
+        <PageHeader title="Settings" />
+        <p className="text-sm text-destructive">
+          {loadError instanceof Error ? loadError.message : String(loadError)}
+        </p>
+      </Page>
     );
   }
-  if (!settings) {
-    return (
-      <div className="page">
-        <header className="page-header">
-          <h1>Settings</h1>
-        </header>
-        <p className="muted">Loading…</p>
-      </div>
-    );
-  }
+  if (!settings) return <SettingsSkeleton />;
 
   return (
-    <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Settings</h1>
-          <p className="page-subtitle">
-            LLM provider and Telegram delivery configuration. Your job filter lives on the Profile page.
-          </p>
+    <Page>
+      <PageHeader
+        title="Settings"
+        description="LLM provider and Telegram delivery configuration. Your job filter lives on the Profile page."
+      />
+
+      <form onSubmit={save} className="flex flex-col gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>LLM extraction</CardTitle>
+            <CardDescription>The model that reads a careers page and pulls out postings.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {/* Two columns once there's room, so a single field never stretches
+                the full width of an ultrawide window. */}
+            <FieldGroup className="xl:grid xl:grid-cols-2 xl:gap-x-6">
+              <Field>
+                <FieldLabel htmlFor="settings-provider">Provider</FieldLabel>
+                <SelectCombobox
+                  id="settings-provider"
+                  options={PROVIDER_OPTIONS}
+                  value={settings.llm_provider}
+                  onValueChange={(llm_provider) => setSettings({ ...settings, llm_provider })}
+                  placeholder="Choose a provider"
+                  searchPlaceholder="Search providers…"
+                />
+                <FieldDescription>
+                  Anthropic uses the Messages API; anything OpenAI-shaped goes through the compatible route.
+                </FieldDescription>
+              </Field>
+
+              <Field>
+                <FieldLabel htmlFor="settings-model">Model</FieldLabel>
+                <Input
+                  id="settings-model"
+                  value={settings.llm_model}
+                  onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
+                  placeholder="claude-sonnet-5"
+                />
+                <FieldDescription>The exact model id as your provider spells it.</FieldDescription>
+              </Field>
+
+              {settings.llm_provider === "openai-compatible" && (
+                <Field>
+                  <FieldLabel htmlFor="settings-base-url">Base URL</FieldLabel>
+                  <Input
+                    id="settings-base-url"
+                    value={settings.llm_base_url}
+                    onChange={(e) => setSettings({ ...settings, llm_base_url: e.target.value })}
+                    placeholder="https://api.openai.com/v1"
+                  />
+                  <FieldDescription>
+                    Leave blank for OpenAI; set it for Gemini, Groq, OpenRouter, Ollama and friends.
+                  </FieldDescription>
+                </Field>
+              )}
+
+              <Field>
+                <FieldLabel htmlFor="settings-llm-key">API key</FieldLabel>
+                <Input
+                  id="settings-llm-key"
+                  type="password"
+                  value={secrets.llm_api_key}
+                  onChange={(e) => setSecrets({ ...secrets, llm_api_key: e.target.value })}
+                  placeholder={secretPlaceholder(settings.has_llm_api_key)}
+                />
+                <FieldDescription>
+                  Stored encrypted and never sent back to this page — leave blank to keep the current key.
+                </FieldDescription>
+              </Field>
+            </FieldGroup>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Telegram</CardTitle>
+            <CardDescription>Where matched postings get delivered.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <FieldGroup className="xl:grid xl:grid-cols-2 xl:gap-x-6">
+              <Field>
+                <FieldLabel htmlFor="settings-bot-token">Bot token</FieldLabel>
+                <Input
+                  id="settings-bot-token"
+                  type="password"
+                  value={secrets.telegram_bot_token}
+                  onChange={(e) => setSecrets({ ...secrets, telegram_bot_token: e.target.value })}
+                  placeholder={secretPlaceholder(settings.has_telegram_bot_token)}
+                />
+                <FieldDescription>Issued by @BotFather when you create the bot.</FieldDescription>
+              </Field>
+
+              <Field>
+                <FieldLabel htmlFor="settings-chat-id">Chat ID(s)</FieldLabel>
+                <Input
+                  id="settings-chat-id"
+                  value={settings.telegram_chat_id}
+                  onChange={(e) => setSettings({ ...settings, telegram_chat_id: e.target.value })}
+                  placeholder="123456789, 987654321"
+                />
+                <FieldDescription>
+                  Your numeric ID from @userinfobot — not the bot's own ID. Comma-separate to notify several
+                  accounts.
+                </FieldDescription>
+              </Field>
+
+              <Field orientation="horizontal" className="xl:col-span-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={tgTest.status === "sending"}
+                  onClick={testTelegram}
+                >
+                  {tgTest.status === "sending" && <Spinner />}
+                  {tgTest.status === "sending" ? "Sending…" : "Send test message"}
+                </Button>
+                {tgTest.status === "ok" && (
+                  <span className="flex items-center gap-1.5 text-sm text-primary">
+                    <CheckCircle2Icon className="size-4" />
+                    Sent — check your Telegram
+                  </span>
+                )}
+                {tgTest.status === "fail" && (
+                  <span className="text-sm text-destructive">{tgTest.message}</span>
+                )}
+              </Field>
+
+              <FieldDescription className="xl:col-span-2">
+                Save settings first if you just changed them. "chat not found" means the chat ID is wrong, or you
+                haven't pressed Start in your bot's chat yet.
+              </FieldDescription>
+            </FieldGroup>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Company research</CardTitle>
+            <CardDescription>
+              Look up the company behind a matched posting — legitimacy, size, funding — before notifying. Never
+              blocks a match, only adds a caution when something looks off.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <FieldGroup>
+              <Field orientation="horizontal">
+                <FieldLabel htmlFor="settings-company-filter">
+                  Research companies behind matched postings
+                </FieldLabel>
+                <Switch
+                  id="settings-company-filter"
+                  checked={settings.company_filter_enabled}
+                  onCheckedChange={(company_filter_enabled) =>
+                    setSettings({ ...settings, company_filter_enabled })
+                  }
+                />
+              </Field>
+
+              <Field>
+                <FieldLabel htmlFor="settings-tavily-key">Tavily API key</FieldLabel>
+                <Input
+                  id="settings-tavily-key"
+                  type="password"
+                  value={secrets.tavily_api_key}
+                  onChange={(e) => setSecrets({ ...secrets, tavily_api_key: e.target.value })}
+                  placeholder={secretPlaceholder(settings.has_tavily_api_key)}
+                />
+                <FieldDescription>
+                  Free at tavily.com.
+                  {settings.company_filter_enabled && !settings.has_tavily_api_key && (
+                    <span className="text-destructive"> Required for company research to actually run.</span>
+                  )}
+                </FieldDescription>
+              </Field>
+            </FieldGroup>
+          </CardContent>
+        </Card>
+
+        <div className="flex justify-end">
+          <Button type="submit" disabled={saving}>
+            {saving && <Spinner />}
+            {saving ? "Saving…" : "Save settings"}
+          </Button>
         </div>
-      </header>
-
-      <form onSubmit={save}>
-        <section className="card">
-          <h2>LLM extraction</h2>
-          <div className="grid-2">
-            <label>
-              Provider
-              <select
-                value={settings.llm_provider}
-                onChange={(e) => setSettings({ ...settings, llm_provider: e.target.value })}
-              >
-                <option value="">— choose —</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="openai-compatible">OpenAI-compatible (OpenAI, Gemini, Groq, OpenRouter, Ollama…)</option>
-              </select>
-            </label>
-            <label>
-              Model
-              <input
-                value={settings.llm_model}
-                onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
-                placeholder="model id"
-              />
-            </label>
-          </div>
-          {settings.llm_provider === "openai-compatible" && (
-            <label>
-              Base URL <span className="hint">(leave blank for OpenAI; set for Gemini/Groq/OpenRouter/Ollama…)</span>
-              <input
-                value={settings.llm_base_url}
-                onChange={(e) => setSettings({ ...settings, llm_base_url: e.target.value })}
-                placeholder="https://api.openai.com/v1"
-              />
-            </label>
-          )}
-          <label>
-            API key
-            <input
-              type="password"
-              value={secrets.llm_api_key}
-              onChange={(e) => setSecrets({ ...secrets, llm_api_key: e.target.value })}
-              placeholder={secretPlaceholder(settings.has_llm_api_key)}
-            />
-          </label>
-        </section>
-
-        <section className="card">
-          <h2>Telegram</h2>
-          <div className="grid-2">
-            <label>
-              Bot token <span className="hint">(from @BotFather)</span>
-              <input
-                type="password"
-                value={secrets.telegram_bot_token}
-                onChange={(e) => setSecrets({ ...secrets, telegram_bot_token: e.target.value })}
-                placeholder={secretPlaceholder(settings.has_telegram_bot_token)}
-              />
-            </label>
-            <label>
-              Chat ID(s){" "}
-              <span className="hint">
-                numeric ID from @userinfobot — not your bot's own ID. Comma-separated to notify multiple accounts
-                (e.g. for testing).
-              </span>
-              <input
-                value={settings.telegram_chat_id}
-                onChange={(e) => setSettings({ ...settings, telegram_chat_id: e.target.value })}
-                placeholder="123456789, 987654321"
-              />
-            </label>
-          </div>
-          <div className="tg-test-row">
-            <button type="button" className="secondary" disabled={tgTest.status === "sending"} onClick={testTelegram}>
-              {tgTest.status === "sending" ? "Sending…" : "Send test message"}
-            </button>
-            {tgTest.status === "ok" && <span className="ok-text">Sent ✓ — check your Telegram</span>}
-            {tgTest.status === "fail" && <span className="error">{tgTest.message}</span>}
-          </div>
-          <p className="hint">
-            Save settings first if you just changed them. "chat not found" means the chat ID is wrong (it must be
-            your personal ID from @userinfobot, not the bot's own ID) or you haven't pressed Start in your bot's
-            chat yet.
-          </p>
-        </section>
-
-        <section className="card">
-          <h2>
-            Company research <span className="hint">(optional)</span>
-          </h2>
-          <p className="hint">
-            Look up the company behind a matched posting — legitimacy, size, funding — before notifying. Never
-            blocks a match, only adds a caution when something looks off.
-          </p>
-          <label className="toggle-row">
-            <input
-              type="checkbox"
-              checked={settings.company_filter_enabled}
-              onChange={(e) => setSettings({ ...settings, company_filter_enabled: e.target.checked })}
-            />
-            Research companies behind matched postings
-          </label>
-          <label>
-            Tavily API key <span className="hint">free at tavily.com</span>
-            <input
-              type="password"
-              value={secrets.tavily_api_key}
-              onChange={(e) => setSecrets({ ...secrets, tavily_api_key: e.target.value })}
-              placeholder={secretPlaceholder(settings.has_tavily_api_key)}
-            />
-          </label>
-          {settings.company_filter_enabled && !settings.has_tavily_api_key && (
-            <p className="error">Needs a Tavily API key above to actually run.</p>
-          )}
-        </section>
-
-        <button type="submit" disabled={saving}>
-          {saving ? "Saving…" : "Save settings"}
-        </button>
       </form>
 
-      <section className="card">
-        <h2>Danger zone</h2>
-        <p className="hint">
-          Deletes every scraped posting and its screening/company history, and resets every source so the next
-          check re-fetches and re-extracts from scratch — useful after changing extraction or filtering logic and
-          wanting a clean test run. Settings, sources, and company research are kept.
-        </p>
-        <button type="button" className="danger" disabled={clearing} onClick={clearPostings}>
-          {clearing ? "Clearing…" : "Clear all postings"}
-        </button>
-      </section>
-    </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Danger zone</CardTitle>
+          <CardDescription>
+            Deletes every scraped posting and its screening/company history, and resets every source so the next
+            check re-fetches from scratch. Settings, sources, and company research are kept.
+          </CardDescription>
+        </CardHeader>
+        <CardFooter className="border-t">
+          <Button type="button" variant="destructive" disabled={clearing} onClick={clearPostings}>
+            {clearing && <Spinner />}
+            {clearing ? "Clearing…" : "Clear all postings"}
+          </Button>
+        </CardFooter>
+      </Card>
+    </Page>
   );
 }

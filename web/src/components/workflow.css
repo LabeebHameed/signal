@@ -47,10 +47,12 @@
   fill: currentColor;
 }
 
+/* Top-left, not top-right: the inspector panel floats over the canvas's
+   right edge from `xl` up and would otherwise sit on top of this. */
 .wf-zoom-readout {
   position: absolute;
   top: 12px;
-  right: 12px;
+  left: 12px;
   z-index: 5;
   background: var(--popover);
   border: 1px solid var(--border);

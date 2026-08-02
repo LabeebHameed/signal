@@ -7,7 +7,8 @@ import { PageHeader, WidePage } from "@/components/PageShell";
 import { WorkflowGraph, type FunnelCounts, type InspectorState, type SourceStats } from "../components/WorkflowGraph";
 import { WorkflowInspector } from "../components/WorkflowInspector";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 /** limit:1 — only .total is read, same count-only query pattern Dashboard.tsx
  * uses. Kept as separate small queries (not one combined endpoint) so each
@@ -121,34 +122,44 @@ export default function Workflow() {
         description="How postings move through the pipeline — click a step to see exactly what passed, what failed, and why."
       />
 
-      <div className="grid w-full items-start gap-6 xl:grid-cols-[1fr_380px]">
-        <Card className="overflow-hidden py-0">
-          <WorkflowGraph
-            pages={pages}
-            settings={settings}
-            counts={counts}
-            sourceStats={sourceStats}
-            selected={selected}
-            onSelect={setSelected}
-          />
-        </Card>
-        <Card className="xl:sticky xl:top-20">
-          <CardContent className="flex flex-col gap-3">
-            {selected.kind !== "overview" && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="self-start"
-                onClick={() => setSelected({ kind: "overview" })}
-              >
-                <ArrowLeftIcon />
-                Back to overview
-              </Button>
-            )}
-            <WorkflowInspector state={selected} counts={counts} pages={pages} settings={settings} />
-          </CardContent>
-        </Card>
-      </div>
+      {/* The canvas takes the full width of the page and the inspector rides
+          on top of it as a floating panel, so the graph never gives up
+          horizontal room to the sidebar. The overlay only starts at `xl`:
+          below that, a 380px panel leaves too little canvas beside it and the
+          graph fits itself down to an unreadable zoom, so the panel drops
+          back to a normal block underneath instead. */}
+      <Card className="relative w-full overflow-hidden py-0">
+        <WorkflowGraph
+          pages={pages}
+          settings={settings}
+          counts={counts}
+          sourceStats={sourceStats}
+          selected={selected}
+          onSelect={setSelected}
+        />
+
+        <aside
+          className={cn(
+            "flex flex-col gap-3 border-t border-border p-4",
+            "xl:absolute xl:top-4 xl:right-4 xl:bottom-4 xl:z-10 xl:w-[380px] xl:overflow-y-auto",
+            "xl:rounded-2xl xl:border-0 xl:bg-popover/90 xl:p-5 xl:shadow-2xl xl:ring-1 xl:ring-foreground/10",
+            "xl:supports-backdrop-filter:bg-popover/70 xl:supports-backdrop-filter:backdrop-blur-md",
+          )}
+        >
+          {selected.kind !== "overview" && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="self-start"
+              onClick={() => setSelected({ kind: "overview" })}
+            >
+              <ArrowLeftIcon />
+              Back to overview
+            </Button>
+          )}
+          <WorkflowInspector state={selected} counts={counts} pages={pages} settings={settings} />
+        </aside>
+      </Card>
     </WidePage>
   );
 }

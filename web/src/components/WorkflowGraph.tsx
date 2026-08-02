@@ -15,7 +15,7 @@ import {
   type Node,
   type NodeProps,
 } from "@xyflow/react";
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import "@xyflow/react/dist/style.css";
 import "./workflow.css";
 import type { Settings, WatchedPage } from "../api";
@@ -363,16 +363,52 @@ function ZoomReadout() {
  * anything refetches, so this only re-fits when the set of node ids
  * actually changes shape (a source added/removed) — not on every data
  * refresh of the same nodes. */
+/** The inspector panel floats over the canvas's right edge from `xl` up, so
+ * the graph has to be fitted into the space *beside* it or the rightmost
+ * nodes end up underneath. Mirrors the panel's width + offsets in
+ * Workflow.tsx; below `xl` the panel sits under the canvas and reserves
+ * nothing. */
+function inspectorInset(): number {
+  if (typeof window === "undefined") return 0;
+  return window.matchMedia("(min-width: 1280px)").matches ? 380 + 32 : 0;
+}
+
 function AutoFitView({ nodeIds }: { nodeIds: string }) {
   const { fitView } = useReactFlow();
   const prev = useRef<string | null>(null);
+
+  const fit = useCallback(
+    (duration: number) =>
+      fitView({
+        duration,
+        padding: { top: "24px", bottom: "24px", left: "24px", right: `${24 + inspectorInset()}px` },
+      }),
+    [fitView],
+  );
+
   useEffect(() => {
     if (prev.current !== nodeIds) {
       prev.current = nodeIds;
       // Let the new nodes commit to the DOM before measuring their bounds.
-      requestAnimationFrame(() => fitView({ duration: 200 }));
+      requestAnimationFrame(() => fit(200));
     }
-  }, [nodeIds, fitView]);
+  }, [nodeIds, fit]);
+
+  // Crossing the md/lg breakpoints changes how much room the panel takes, so
+  // the reserved space has to be recomputed as the window resizes.
+  useEffect(() => {
+    let frame = 0;
+    const onResize = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => fit(0));
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(frame);
+    };
+  }, [fit]);
+
   return null;
 }
 

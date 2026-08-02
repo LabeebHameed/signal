@@ -18,12 +18,18 @@ import { cn } from "@/lib/utils";
 export type TagTone = "neutral" | "negative" | "include" | "exclude";
 
 /** What the tag DOES, mapped onto brand tokens. Provenance (AI vs. the
- * seeker's own typing) is layered on top as a modifier, not a fifth tone. */
+ * seeker's own typing) is layered on top as a modifier, not a fifth tone.
+ *
+ * These sit *inside* the field, whose own surface is `bg-input/30`, so each
+ * tone is weighted to stay clearly readable as a separate chip rather than
+ * blending into the box behind it. */
 const TONE_CLASSES: Record<TagTone, string> = {
-  neutral: "bg-muted text-foreground",
-  negative: "bg-destructive/15 text-destructive",
-  include: "bg-primary/15 text-primary",
-  exclude: "bg-destructive/15 text-destructive",
+  neutral: "bg-foreground/20 text-foreground",
+  negative: "bg-destructive/25 text-destructive",
+  // Not `text-primary`: the brand's emerald is a deep shade that goes
+  // dark-on-dark once it also tints the chip's own background.
+  include: "bg-emerald-500/20 text-emerald-400",
+  exclude: "bg-destructive/25 text-destructive",
 };
 
 interface TagFieldProps {
@@ -168,7 +174,7 @@ export default function TagField({
 
   return (
     <div
-      className="flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-4xl border border-input bg-input/30 px-2.5 py-1.5 text-sm transition-colors focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50"
+      className="flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-4xl border border-input bg-input/30 px-2.5 py-1.5 text-sm transition-colors focus-within:border-ring"
       onMouseDown={(e) => {
         // Clicking the padding focuses the input; clicking a tag or its
         // remove button must keep its own handler.

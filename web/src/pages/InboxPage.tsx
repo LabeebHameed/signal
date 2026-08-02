@@ -73,7 +73,7 @@ export default function InboxPage() {
   const noProfile = Boolean(settings) && !profileHasContent(settings!.filter_profile);
 
   return (
-    <Page className="max-w-6xl">
+    <Page>
       <PageHeader
         title="Inbox"
         description={`${total} posting${total === 1 ? "" : "s"} that fit your profile.`}
@@ -101,13 +101,13 @@ export default function InboxPage() {
       )}
 
       {isLoading ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 min-[2000px]:grid-cols-5">
           {Array.from({ length: 6 }).map((_, i) => (
             <JobCardSkeleton key={i} />
           ))}
         </div>
       ) : items.length > 0 ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 min-[2000px]:grid-cols-5">
           {items.map((p) => (
             <JobCard key={p.id} posting={p} />
           ))}

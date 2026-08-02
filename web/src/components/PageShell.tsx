@@ -3,25 +3,23 @@ import { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * Every route renders inside this. The `p-6` / `gap-6` rhythm is the same
+ * Every route renders inside this. Pages take the full width of the inset —
+ * no centered reading column — so the layout tracks the browser window at
+ * every size. Padding steps up with the viewport and lands on the same
  * `--card-spacing` (--spacing(6) = 24px) the brand preset's Card uses, so
  * page padding, the gaps between cards, and the padding inside a card all
- * line up on one 24px grid.
+ * line up on one grid.
  */
 export function Page({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn("mx-auto flex w-full max-w-5xl flex-col gap-6 p-6", className)}>
+    <div className={cn("flex w-full min-w-0 flex-col gap-4 p-4 md:gap-6 md:p-6", className)}>
       {children}
     </div>
   );
 }
 
-/** Wider column for the Workflow page's graph + inspector split. */
-export function WidePage({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <div className={cn("flex w-full flex-col gap-6 p-6", className)}>{children}</div>
-  );
-}
+/** Alias kept for the Workflow page, which reads as its own kind of layout. */
+export const WidePage = Page;
 
 export function PageHeader({
   title,

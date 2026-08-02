@@ -145,7 +145,7 @@ export default function Postings() {
   const statusLabel = STATUS_OPTIONS.find((o) => o.value === status)?.label.toLowerCase();
 
   return (
-    <Page className="max-w-6xl">
+    <Page>
       <PageHeader
         title="Postings"
         description={

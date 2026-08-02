@@ -156,7 +156,7 @@ export default function Dashboard() {
         </Card>
       )}
 
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <StatCard value={matchesToday} label="Matches today" to="/inbox" isLoading={loading} />
         <StatCard value={pendingTotal} label="Awaiting screening" to="/postings" isLoading={loading} />
         <StatCard

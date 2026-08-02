@@ -86,9 +86,11 @@ function ProfileTag({ tone, ai, children }: { tone?: "include" | "exclude"; ai?:
     <Badge
       variant="secondary"
       className={cn(
-        "bg-muted text-foreground",
-        tone === "include" && "bg-primary/15 text-primary",
-        tone === "exclude" && "bg-destructive/15 text-destructive",
+        // Matches TagField's tone weights so a tag looks the same whether the
+        // profile is being read or edited.
+        "bg-foreground/20 text-foreground",
+        tone === "include" && "bg-emerald-500/20 text-emerald-400",
+        tone === "exclude" && "bg-destructive/25 text-destructive",
         ai && "ring-1 ring-current/30 ring-inset",
       )}
     >

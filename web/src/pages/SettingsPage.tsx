@@ -177,7 +177,9 @@ export default function SettingsPage() {
             <CardDescription>The model that reads a careers page and pulls out postings.</CardDescription>
           </CardHeader>
           <CardContent>
-            <FieldGroup>
+            {/* Two columns once there's room, so a single field never stretches
+                the full width of an ultrawide window. */}
+            <FieldGroup className="xl:grid xl:grid-cols-2 xl:gap-x-6">
               <Field>
                 <FieldLabel htmlFor="settings-provider">Provider</FieldLabel>
                 <SelectCombobox
@@ -242,7 +244,7 @@ export default function SettingsPage() {
             <CardDescription>Where matched postings get delivered.</CardDescription>
           </CardHeader>
           <CardContent>
-            <FieldGroup>
+            <FieldGroup className="xl:grid xl:grid-cols-2 xl:gap-x-6">
               <Field>
                 <FieldLabel htmlFor="settings-bot-token">Bot token</FieldLabel>
                 <Input
@@ -269,7 +271,7 @@ export default function SettingsPage() {
                 </FieldDescription>
               </Field>
 
-              <Field orientation="horizontal">
+              <Field orientation="horizontal" className="xl:col-span-2">
                 <Button
                   type="button"
                   variant="outline"
@@ -290,7 +292,7 @@ export default function SettingsPage() {
                 )}
               </Field>
 
-              <FieldDescription>
+              <FieldDescription className="xl:col-span-2">
                 Save settings first if you just changed them. "chat not found" means the chat ID is wrong, or you
                 haven't pressed Start in your bot's chat yet.
               </FieldDescription>

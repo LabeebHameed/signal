@@ -8,7 +8,7 @@ type Tone = "ok" | "error" | "muted" | "pending" | "checking";
 /** One tone vocabulary for every status pill in the app, expressed in brand
  * tokens: "ok" is the brand's emerald, everything else steps down from it. */
 const TONE_CLASSES: Record<Tone, string> = {
-  ok: "bg-primary/15 text-primary",
+  ok: "bg-emerald-500/15 text-emerald-400",
   error: "bg-destructive/15 text-destructive",
   muted: "bg-muted text-muted-foreground",
   pending: "bg-amber-500/15 text-amber-500",

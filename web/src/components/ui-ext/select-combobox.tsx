@@ -76,7 +76,7 @@ export function SelectCombobox({
         aria-label={ariaLabel}
         className={cn(
           "flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-4xl border border-input bg-input/30 px-3 py-1 text-left text-sm transition-colors outline-none",
-          "data-popup-open:border-ring focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+          "data-popup-open:border-ring focus-visible:border-ring",
           "disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50",
           className,
         )}

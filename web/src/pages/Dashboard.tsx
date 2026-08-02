@@ -5,7 +5,7 @@ import { RefreshCwIcon, TriangleAlertIcon } from "lucide-react";
 
 import { api } from "@/api";
 import { Page, PageHeader } from "@/components/PageShell";
-import { RecentPostings } from "@/components/RecentPostings";
+import { RECENT_POSTINGS_LIMIT, RecentPostings } from "@/components/RecentPostings";
 import { useToast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -61,7 +61,7 @@ export default function Dashboard() {
   });
   const { data: recentPage, isLoading: postingsLoading } = useQuery({
     queryKey: ["postings", "recent"],
-    queryFn: () => api.listPostings({ limit: 8, sort: "first_seen_at", order: "desc" }),
+    queryFn: () => api.listPostings({ limit: RECENT_POSTINGS_LIMIT, sort: "first_seen_at", order: "desc" }),
   });
   // The most recent matches, used both for the "matches today" count and
   // (via .total) how many have ever matched — one query covers both.

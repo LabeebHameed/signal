@@ -35,6 +35,13 @@ import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { timeAgo } from "@/lib/format";
 import { resolvePostingLink } from "@/lib/parsePosting";
 
+/**
+ * How many rows the card shows before you go to the Postings page for the
+ * rest. Drives both the query's limit and the skeleton's row count, so the
+ * loading state is exactly the height of the list that replaces it.
+ */
+export const RECENT_POSTINGS_LIMIT = 7;
+
 /** The row's category icon, chosen from where the posting sits in the
  * pipeline — the same role the merchant-category icon plays in the shadcn
  * transactions table. */
@@ -88,7 +95,7 @@ function RowActions({ posting }: { posting: Posting }) {
 function SkeletonRows() {
   return (
     <>
-      {Array.from({ length: 5 }).map((_, i) => (
+      {Array.from({ length: RECENT_POSTINGS_LIMIT }).map((_, i) => (
         <TableRow key={i} className="hover:bg-transparent">
           <TableCell className="w-11 px-0 py-4">
             <Skeleton className="size-11 rounded-xl" />

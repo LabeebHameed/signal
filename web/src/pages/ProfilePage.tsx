@@ -1,5 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useEffect, useState } from "react";
+import { PencilIcon, SparklesIcon } from "lucide-react";
+
 import {
   api,
   COMP_CURRENCIES,
@@ -7,10 +9,34 @@ import {
   CompPeriod,
   FilterProfile,
   Settings,
-} from "../api";
-import { useToast } from "../components/Toast";
-import TagField from "../components/TagField";
-import { formatCompRange, groupDigits, parseAmount } from "../lib/format";
+} from "@/api";
+import { useConfirm } from "@/components/ConfirmDialog";
+import { Page, PageHeader } from "@/components/PageShell";
+import TagField from "@/components/TagField";
+import { useToast } from "@/components/Toast";
+import { SelectCombobox, type SelectOption } from "@/components/ui-ext/select-combobox";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
+import { formatCompRange, groupDigits, parseAmount } from "@/lib/format";
 import {
   aiValuesFor,
   CompPrefs,
@@ -25,7 +51,8 @@ import {
   readLocations,
   serializeLocations,
   splitToTags,
-} from "../lib/profileTags";
+} from "@/lib/profileTags";
+import { cn } from "@/lib/utils";
 
 const CURRENCY_LABELS: Record<CompCurrency, string> = {
   USD: "USD $",
@@ -33,6 +60,72 @@ const CURRENCY_LABELS: Record<CompCurrency, string> = {
   GBP: "GBP £",
   INR: "INR ₹",
 };
+
+const CURRENCY_OPTIONS: SelectOption[] = COMP_CURRENCIES.map((code) => ({
+  value: code,
+  label: CURRENCY_LABELS[code],
+}));
+
+const PERIOD_OPTIONS: SelectOption[] = [
+  { value: "year", label: "Per year" },
+  { value: "month", label: "Per month" },
+];
+
+/** One read-only block in view mode: a small caps label above its content. */
+function ProfileSection({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid gap-2">
+      <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</h3>
+      {children}
+    </div>
+  );
+}
+
+function ProfileTag({ tone, ai, children }: { tone?: "include" | "exclude"; ai?: boolean; children: React.ReactNode }) {
+  return (
+    <Badge
+      variant="secondary"
+      className={cn(
+        "bg-muted text-foreground",
+        tone === "include" && "bg-primary/15 text-primary",
+        tone === "exclude" && "bg-destructive/15 text-destructive",
+        ai && "ring-1 ring-current/30 ring-inset",
+      )}
+    >
+      {children}
+    </Badge>
+  );
+}
+
+function EmptyText({ children }: { children: React.ReactNode }) {
+  return <span className="text-sm text-muted-foreground">{children}</span>;
+}
+
+function ProfileSkeleton() {
+  return (
+    <Page>
+      <PageHeader title="Profile Criteria" />
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-56" />
+          <Skeleton className="h-4 w-40" />
+        </CardHeader>
+        <CardContent className="grid gap-7">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="grid gap-2">
+              <Skeleton className="h-3 w-32" />
+              <div className="flex gap-1.5">
+                <Skeleton className="h-6 w-20 rounded-4xl" />
+                <Skeleton className="h-6 w-24 rounded-4xl" />
+                <Skeleton className="h-6 w-16 rounded-4xl" />
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    </Page>
+  );
+}
 
 export default function ProfilePage() {
   const queryClient = useQueryClient();
@@ -93,6 +186,7 @@ export default function ProfilePage() {
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
   const toast = useToast();
+  const confirm = useConfirm();
 
   const patchProfile = (patch: Partial<FilterProfile>) => {
     setSettings((s) => (s ? { ...s, filter_profile: { ...s.filter_profile, ...patch } } : s));
@@ -149,15 +243,16 @@ export default function ProfilePage() {
     }
   };
 
-  const clearProfile = () => {
+  const clearProfile = async () => {
     if (!settings) return;
-    if (
-      !confirm(
-        "Clear the profile? Statement, target role, and preferences will all be wiped.",
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: "Clear the profile?",
+      description: "Statement, target role, and preferences will all be wiped.",
+      confirmLabel: "Clear profile",
+      destructive: true,
+    });
+    if (!ok) return;
+
     setSettings({ ...settings, profile_input: "", filter_profile: {} });
     setLoc({ include: [], exclude: [] });
     setComp({ currency: "USD", period: "year" });
@@ -211,25 +306,16 @@ export default function ProfilePage() {
 
   if (loadError && !settings) {
     return (
-      <div className="page">
-        <header className="page-header">
-          <h1>Profile</h1>
-        </header>
-        <p className="error">{loadError instanceof Error ? loadError.message : String(loadError)}</p>
-      </div>
+      <Page>
+        <PageHeader title="Profile Criteria" />
+        <p className="text-sm text-destructive">
+          {loadError instanceof Error ? loadError.message : String(loadError)}
+        </p>
+      </Page>
     );
   }
 
-  if (!settings) {
-    return (
-      <div className="page">
-        <header className="page-header">
-          <h1>Profile</h1>
-        </header>
-        <p className="muted">Loading…</p>
-      </div>
-    );
-  }
+  if (!settings) return <ProfileSkeleton />;
 
   const profile = settings.filter_profile;
   const roleTitle = profile.roles || "Target Role Unspecified";
@@ -246,397 +332,345 @@ export default function ProfilePage() {
   const noLocationFilter = loc.include.length === 0 && loc.exclude.length === 0;
 
   return (
-    <div className="page profile-redesign-page">
-      <header className="page-header">
-        <div>
-          <h1>Profile Criteria</h1>
-          <p className="page-subtitle">Your active job preferences used by AI to judge incoming postings.</p>
-        </div>
-      </header>
+    <Page>
+      <PageHeader
+        title="Profile Criteria"
+        description="Your active job preferences used by AI to judge incoming postings."
+      />
 
       {!isEditing ? (
-        /* VIEW MODE: Spacious, full-width Profile Card */
-        <div className="profile-spacious-card">
-          <div className="profile-spacious-header">
-            <div className="profile-spacious-title-group">
-              <h2 className="profile-user-title">{roleTitle}</h2>
-              <span className="profile-badge">Target Role</span>
-            </div>
-            <button
-              type="button"
-              className="profile-btn-edit"
-              onClick={() => setIsEditing(true)}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-              </svg>
-              Edit Profile
-            </button>
-          </div>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">{roleTitle}</CardTitle>
+            <CardDescription>Target role</CardDescription>
+            <CardAction>
+              <Button variant="outline" size="sm" onClick={() => setIsEditing(true)}>
+                <PencilIcon />
+                Edit Profile
+              </Button>
+            </CardAction>
+          </CardHeader>
 
-          {/* Plain Text Goal / Input Statement */}
-          {settings.profile_input && (
-            <div className="profile-section-group">
-              <h3 className="profile-section-label">Your Statement</h3>
-              <p className="profile-statement-text">"{settings.profile_input}"</p>
-            </div>
-          )}
-
-          {hasAiTags(profile) && (
-            <p className="profile-tag-legend">
-              <span className="profile-tag-pill tag-chip-ai legend-swatch">AI-suggested</span>
-              <span className="profile-tag-pill legend-swatch">Yours</span>
-            </p>
-          )}
-
-          {/* Title Keywords (Hard Filter) */}
-          <div className="profile-section-group">
-            <h3 className="profile-section-label">Title Keywords (Hard Pre-Filter)</h3>
-            {keywordTags.length > 0 ? (
-              <div className="profile-tag-list">
-                {keywordTags.map((tag) => (
-                  <span
-                    key={tag}
-                    className={`profile-tag-pill ${isAiValue(keywordAi, tag) ? "tag-chip-ai" : ""}`}
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <span className="profile-empty-text">None specified</span>
+          <CardContent className="grid gap-7">
+            {settings.profile_input && (
+              <ProfileSection label="Your statement">
+                <p className="text-sm text-muted-foreground italic">"{settings.profile_input}"</p>
+              </ProfileSection>
             )}
-          </div>
 
-          {/* Equivalent Role Synonyms */}
-          <div className="profile-section-group">
-            <h3 className="profile-section-label">Equivalent Titles (Synonyms)</h3>
-            {synonymTags.length > 0 ? (
-              <div className="profile-tag-list">
-                {synonymTags.map((tag) => (
-                  <span
-                    key={tag}
-                    className={`profile-tag-pill ${isAiValue(synonymAi, tag) ? "tag-chip-ai" : ""}`}
-                  >
-                    {tag}
-                  </span>
-                ))}
+            {hasAiTags(profile) && (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <ProfileTag ai>AI-suggested</ProfileTag>
+                <ProfileTag>Yours</ProfileTag>
               </div>
-            ) : (
-              <span className="profile-empty-text">None specified</span>
             )}
-          </div>
 
-          {/* Negative Keywords (Hard Exclude) */}
-          <div className="profile-section-group">
-            <h3 className="profile-section-label">Negative Keywords (Excluded)</h3>
-            {negativeKeywordTags.length > 0 ? (
-              <div className="profile-tag-list">
-                {negativeKeywordTags.map((tag) => (
-                  <span key={tag} className="profile-tag-pill tag-chip-exclude">
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <span className="profile-empty-text">None specified</span>
-            )}
-          </div>
+            <ProfileSection label="Title keywords (hard pre-filter)">
+              {keywordTags.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {keywordTags.map((tag) => (
+                    <ProfileTag key={tag} ai={isAiValue(keywordAi, tag)}>
+                      {tag}
+                    </ProfileTag>
+                  ))}
+                </div>
+              ) : (
+                <EmptyText>None specified</EmptyText>
+              )}
+            </ProfileSection>
 
-          {/* Locations */}
-          <div className="profile-section-group">
-            <h3 className="profile-section-label">Locations</h3>
-            {noLocationFilter ? (
-              <span className="profile-empty-text">No location filter — postings from anywhere pass.</span>
-            ) : (
-              <div className="profile-location-view">
-                {loc.include.length > 0 && (
-                  <div className="profile-location-row">
-                    <span className="profile-location-rule">Only</span>
-                    <div className="profile-tag-list">
+            <ProfileSection label="Equivalent titles (synonyms)">
+              {synonymTags.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {synonymTags.map((tag) => (
+                    <ProfileTag key={tag} ai={isAiValue(synonymAi, tag)}>
+                      {tag}
+                    </ProfileTag>
+                  ))}
+                </div>
+              ) : (
+                <EmptyText>None specified</EmptyText>
+              )}
+            </ProfileSection>
+
+            <ProfileSection label="Negative keywords (excluded)">
+              {negativeKeywordTags.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {negativeKeywordTags.map((tag) => (
+                    <ProfileTag key={tag} tone="exclude">
+                      {tag}
+                    </ProfileTag>
+                  ))}
+                </div>
+              ) : (
+                <EmptyText>None specified</EmptyText>
+              )}
+            </ProfileSection>
+
+            <ProfileSection label="Locations">
+              {noLocationFilter ? (
+                <EmptyText>No location filter — postings from anywhere pass.</EmptyText>
+              ) : (
+                <div className="grid gap-2">
+                  {loc.include.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm text-muted-foreground">Only</span>
                       {loc.include.map((tag) => (
-                        <span key={tag} className="profile-tag-pill tag-chip-include">{tag}</span>
+                        <ProfileTag key={tag} tone="include">
+                          {tag}
+                        </ProfileTag>
                       ))}
                     </div>
-                  </div>
-                )}
-                {loc.exclude.length > 0 && (
-                  <div className="profile-location-row">
-                    <span className="profile-location-rule">Never</span>
-                    <div className="profile-tag-list">
+                  )}
+                  {loc.exclude.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm text-muted-foreground">Never</span>
                       {loc.exclude.map((tag) => (
-                        <span key={tag} className="profile-tag-pill tag-chip-exclude">{tag}</span>
+                        <ProfileTag key={tag} tone="exclude">
+                          {tag}
+                        </ProfileTag>
                       ))}
                     </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+                  )}
+                </div>
+              )}
+            </ProfileSection>
 
-          {/* Metrics Grid */}
-          <div className="profile-metrics-grid">
-            <div className="profile-metric-box">
-              <span className="profile-metric-label">Target Compensation</span>
-              <span className="profile-metric-value profile-metric-figure">
-                {compPreview || "No target set"}
-              </span>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-1 rounded-xl bg-muted/40 p-4">
+                <span className="text-xs text-muted-foreground">Target compensation</span>
+                <span className="font-heading text-lg font-medium">{compPreview || "No target set"}</span>
+              </div>
+              <div className="grid gap-1 rounded-xl bg-muted/40 p-4">
+                <span className="text-xs text-muted-foreground">Postings without stated pay</span>
+                <span className="font-heading text-lg font-medium">Always pass through</span>
+              </div>
             </div>
-            <div className="profile-metric-box">
-              <span className="profile-metric-label">Postings without stated pay</span>
-              <span className="profile-metric-value">Always pass through</span>
-            </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       ) : (
-        /* EDIT MODE: Criteria Form + AI Generator */
-        <form onSubmit={save} className="profile-form-container">
-          {/* AI Generator Card */}
-          <section className="profile-card">
-            <div className="profile-card-header">
-              <h2>AI Profile Generator</h2>
-              <p className="profile-card-subtitle">
-                Describe your target job in plain text. AI will automatically expand it into specific roles, keywords, and title synonyms.
-              </p>
-            </div>
-            <textarea
-              className="profile-prompt-input"
-              value={settings.profile_input}
-              onChange={(e) => setSettings({ ...settings, profile_input: e.target.value })}
-              rows={3}
-              placeholder="e.g. I'm good at design and I want to be a senior product designer or design engineer"
-            />
-            <div className="profile-card-actions">
-              <button
+        <form onSubmit={save} className="flex flex-col gap-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>AI Profile Generator</CardTitle>
+              <CardDescription>
+                Describe your target job in plain text. AI will expand it into specific roles, keywords, and title
+                synonyms.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Field>
+                <FieldLabel htmlFor="profile-input">What are you looking for?</FieldLabel>
+                <Textarea
+                  id="profile-input"
+                  value={settings.profile_input}
+                  onChange={(e) => setSettings({ ...settings, profile_input: e.target.value })}
+                  rows={3}
+                  placeholder="e.g. I'm good at design and I want to be a senior product designer or design engineer"
+                />
+                <FieldDescription>
+                  Kept as written — it's the statement the generated criteria are derived from.
+                </FieldDescription>
+              </Field>
+            </CardContent>
+            <CardFooter className="justify-between border-t">
+              <Button type="button" variant="ghost" onClick={clearProfile}>
+                Clear Profile
+              </Button>
+              <Button
                 type="button"
-                className="profile-btn-secondary"
+                variant="outline"
                 disabled={generating || settings.profile_input.trim() === ""}
                 onClick={generate}
               >
-                {generating ? (
-                  "Generating…"
-                ) : (
-                  <>
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px', verticalAlign: 'text-bottom' }}>
-                      <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" />
-                      <path d="M5 3v4" />
-                      <path d="M19 17v4" />
-                      <path d="M3 5h4" />
-                      <path d="M17 19h4" />
-                    </svg>
-                    Generate Profile
-                  </>
-                )}
-              </button>
-              <button type="button" className="profile-btn-danger" onClick={clearProfile}>
-                Clear Profile
-              </button>
-            </div>
-          </section>
+                {generating ? <Spinner /> : <SparklesIcon />}
+                {generating ? "Generating…" : "Generate Profile"}
+              </Button>
+            </CardFooter>
+          </Card>
 
-          {/* Preferences Form */}
-          <section className="profile-card">
-            <div className="profile-card-header">
-              <h2>Basic Job Criteria</h2>
-              <p className="profile-card-subtitle">
+          <Card>
+            <CardHeader>
+              <CardTitle>Basic Job Criteria</CardTitle>
+              <CardDescription>
                 Fine-tune your job criteria preferences to get better recommendations.
-              </p>
-            </div>
+              </CardDescription>
+            </CardHeader>
 
-            <div className="profile-field-group">
-              <label className="profile-field-label" htmlFor="profile-roles">Target Role *</label>
-              <input
-                id="profile-roles"
-                type="text"
-                className="profile-text-input"
-                value={profile.roles ?? ""}
-                onChange={(e) => patchProfile({ roles: e.target.value })}
-                placeholder="e.g. Product Designer"
-              />
-            </div>
+            <CardContent>
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="profile-roles">Target role</FieldLabel>
+                  <Input
+                    id="profile-roles"
+                    value={profile.roles ?? ""}
+                    onChange={(e) => patchProfile({ roles: e.target.value })}
+                    placeholder="e.g. Product Designer"
+                  />
+                  <FieldDescription>The role in your own words — the judge reads this first.</FieldDescription>
+                </Field>
 
-            <div className="profile-field-group">
-              <label className="profile-field-label" htmlFor="profile-synonyms">Equivalent Titles (Synonyms)</label>
-              <TagField
-                id="profile-synonyms"
-                describedBy="profile-synonyms-hint"
-                values={synonymTags}
-                aiValues={synonymAi}
-                onChange={(next) => patchProfile({ role_synonyms: joinTags(next) })}
-                placeholder="Type a title and press Enter"
-              />
-              <span className="profile-field-hint" id="profile-synonyms-hint">
-                Press Enter to turn a title into a tag. Backspace on an empty field turns the last tag back into text
-                so you can edit it.
-              </span>
-            </div>
-
-            <div className="profile-field-group">
-              <label className="profile-field-label" htmlFor="profile-keywords">Title Keywords (Hard Pre-Filter)</label>
-              <TagField
-                id="profile-keywords"
-                describedBy="profile-keywords-hint"
-                values={keywordTags}
-                aiValues={keywordAi}
-                onChange={(next) => patchProfile({ title_keywords: joinTags(next) })}
-                placeholder="e.g. design, designer, ui, ux"
-              />
-              <span className="profile-field-hint" id="profile-keywords-hint">
-                Postings missing all of these keywords are rejected before the AI judge runs.
-              </span>
-            </div>
-
-            <div className="profile-field-group">
-              <label className="profile-field-label" htmlFor="profile-negative">Negative Keywords (Hard Exclude)</label>
-              <TagField
-                id="profile-negative"
-                describedBy="profile-negative-hint"
-                tone="negative"
-                values={negativeKeywordTags}
-                onChange={(next) => setSettings({ ...settings, negative_keywords: joinTags(next) })}
-                placeholder="e.g. Senior, Contract, Unpaid"
-              />
-              <span className="profile-field-hint" id="profile-negative-hint">
-                Postings whose title contains any of these words are rejected before the AI judge ever runs — no
-                LLM call, no exceptions. Case-insensitive.
-              </span>
-            </div>
-
-            <div className="profile-field-group">
-              <label className="profile-field-label">Locations</label>
-              <div className="profile-location-grid">
-                <div className="profile-location-col">
-                  <span className="profile-subfield-label profile-subfield-include" id="profile-loc-include-label">
-                    Include
-                  </span>
+                <Field>
+                  <FieldLabel htmlFor="profile-synonyms">Equivalent titles (synonyms)</FieldLabel>
                   <TagField
-                    tone="include"
-                    describedBy="profile-loc-include-label"
-                    values={loc.include}
-                    onChange={(next) => updateLocations({ include: next })}
-                    placeholder="e.g. Remote, Germany"
+                    id="profile-synonyms"
+                    describedBy="profile-synonyms-hint"
+                    values={synonymTags}
+                    aiValues={synonymAi}
+                    onChange={(next) => patchProfile({ role_synonyms: joinTags(next) })}
+                    placeholder="Type a title and press Enter"
                   />
-                  <span className="profile-field-hint">
-                    Only these places — plus postings that don't say where.
-                  </span>
-                </div>
-                <div className="profile-location-col">
-                  <span className="profile-subfield-label profile-subfield-exclude" id="profile-loc-exclude-label">
-                    Exclude
-                  </span>
-                  <TagField
-                    tone="exclude"
-                    describedBy="profile-loc-exclude-label"
-                    values={loc.exclude}
-                    onChange={(next) => updateLocations({ exclude: next })}
-                    placeholder="e.g. United States"
-                  />
-                  <span className="profile-field-hint">
-                    Never these places, even if Include also matches.
-                  </span>
-                </div>
-              </div>
-              {noLocationFilter && (
-                <span className="profile-field-hint">
-                  No location filter set — postings from anywhere pass through.
-                </span>
-              )}
-            </div>
+                  <FieldDescription id="profile-synonyms-hint">
+                    Press Enter to turn a title into a tag. Backspace on an empty field turns the last tag back
+                    into text so you can edit it.
+                  </FieldDescription>
+                </Field>
 
-            <div className="profile-field-group">
-              <label className="profile-field-label">Target Compensation</label>
-              <div className="profile-comp-row">
-                <div className="profile-comp-amount">
-                  <span className="profile-subfield-label" id="profile-comp-min-label">From</span>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    aria-labelledby="profile-comp-min-label"
-                    className="profile-text-input profile-amount-input"
-                    value={groupDigits(comp.min)}
-                    onChange={(e) => updateComp({ min: parseAmount(e.target.value) })}
-                    placeholder="120,000"
+                <Field>
+                  <FieldLabel htmlFor="profile-keywords">Title keywords (hard pre-filter)</FieldLabel>
+                  <TagField
+                    id="profile-keywords"
+                    describedBy="profile-keywords-hint"
+                    values={keywordTags}
+                    aiValues={keywordAi}
+                    onChange={(next) => patchProfile({ title_keywords: joinTags(next) })}
+                    placeholder="e.g. design, designer, ui, ux"
                   />
-                </div>
-                <div className="profile-comp-amount">
-                  <span className="profile-subfield-label" id="profile-comp-max-label">To</span>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    aria-labelledby="profile-comp-max-label"
-                    className="profile-text-input profile-amount-input"
-                    value={groupDigits(comp.max)}
-                    onChange={(e) => updateComp({ max: parseAmount(e.target.value) })}
-                    placeholder="160,000"
+                  <FieldDescription id="profile-keywords-hint">
+                    Postings missing all of these keywords are rejected before the AI judge runs.
+                  </FieldDescription>
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor="profile-negative">Negative keywords (hard exclude)</FieldLabel>
+                  <TagField
+                    id="profile-negative"
+                    describedBy="profile-negative-hint"
+                    tone="negative"
+                    values={negativeKeywordTags}
+                    onChange={(next) => setSettings({ ...settings, negative_keywords: joinTags(next) })}
+                    placeholder="e.g. Senior, Contract, Unpaid"
                   />
-                </div>
-                <div className="profile-comp-amount">
-                  <span className="profile-subfield-label" id="profile-comp-currency-label">Currency</span>
-                  <select
-                    aria-labelledby="profile-comp-currency-label"
-                    className="profile-text-input profile-currency-select"
-                    value={comp.currency}
-                    onChange={(e) => updateComp({ currency: e.target.value as CompCurrency })}
-                  >
-                    {COMP_CURRENCIES.map((code) => (
-                      <option key={code} value={code}>{CURRENCY_LABELS[code]}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="profile-comp-amount">
-                  <span className="profile-subfield-label">Per</span>
-                  <div className="profile-radio-group profile-period-group">
-                    {(["year", "month"] as CompPeriod[]).map((period) => (
-                      <label
-                        key={period}
-                        className={`profile-radio-pill ${comp.period === period ? "active" : ""}`}
-                      >
-                        <input
-                          type="radio"
-                          name="compPeriod"
-                          value={period}
-                          checked={comp.period === period}
-                          onChange={() => updateComp({ period })}
-                        />
-                        {period === "year" ? "Year" : "Month"}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <p className={`profile-comp-preview ${compRangeInverted ? "is-invalid" : ""}`}>
-                {compRangeInverted ? (
-                  <>“To” is lower than “From” — swap them so the range reads the right way round.</>
-                ) : compPreview ? (
-                  <>
-                    Screened as <strong>{compPreview}</strong>
-                  </>
-                ) : (
-                  "No pay target set — compensation won't affect screening."
+                  <FieldDescription id="profile-negative-hint">
+                    Postings whose title contains any of these words are rejected before the AI judge ever runs — no
+                    LLM call, no exceptions. Case-insensitive.
+                  </FieldDescription>
+                </Field>
+
+                <FieldGroup className="grid gap-4 sm:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor="profile-loc-include">Locations — include</FieldLabel>
+                    <TagField
+                      id="profile-loc-include"
+                      tone="include"
+                      describedBy="profile-loc-include-hint"
+                      values={loc.include}
+                      onChange={(next) => updateLocations({ include: next })}
+                      placeholder="e.g. Remote, Germany"
+                    />
+                    <FieldDescription id="profile-loc-include-hint">
+                      Only these places — plus postings that don't say where.
+                    </FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="profile-loc-exclude">Locations — exclude</FieldLabel>
+                    <TagField
+                      id="profile-loc-exclude"
+                      tone="exclude"
+                      describedBy="profile-loc-exclude-hint"
+                      values={loc.exclude}
+                      onChange={(next) => updateLocations({ exclude: next })}
+                      placeholder="e.g. United States"
+                    />
+                    <FieldDescription id="profile-loc-exclude-hint">
+                      Never these places, even if Include also matches.
+                    </FieldDescription>
+                  </Field>
+                </FieldGroup>
+
+                {noLocationFilter && (
+                  <FieldDescription>
+                    No location filter set — postings from anywhere pass through.
+                  </FieldDescription>
                 )}
-              </p>
-              <span className="profile-field-hint">
-                A posting that states pay below your floor is rejected outright. Most postings don't disclose pay at
-                all — those always pass through to the AI judge.
-              </span>
-            </div>
 
-            <div className="profile-form-footer">
-              <button
-                type="button"
-                className="profile-btn-secondary"
-                onClick={() => setIsEditing(false)}
-              >
+                <FieldGroup className="grid gap-4 sm:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor="profile-comp-min">Compensation from</FieldLabel>
+                    <Input
+                      id="profile-comp-min"
+                      inputMode="numeric"
+                      value={groupDigits(comp.min)}
+                      onChange={(e) => updateComp({ min: parseAmount(e.target.value) })}
+                      placeholder="120,000"
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="profile-comp-max">Compensation to</FieldLabel>
+                    <Input
+                      id="profile-comp-max"
+                      inputMode="numeric"
+                      value={groupDigits(comp.max)}
+                      onChange={(e) => updateComp({ max: parseAmount(e.target.value) })}
+                      placeholder="160,000"
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="profile-comp-currency">Currency</FieldLabel>
+                    <SelectCombobox
+                      id="profile-comp-currency"
+                      options={CURRENCY_OPTIONS}
+                      value={comp.currency}
+                      onValueChange={(currency) => updateComp({ currency: currency as CompCurrency })}
+                      placeholder="Currency"
+                      searchPlaceholder="Search currencies…"
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="profile-comp-period">Per</FieldLabel>
+                    <SelectCombobox
+                      id="profile-comp-period"
+                      options={PERIOD_OPTIONS}
+                      value={comp.period}
+                      onValueChange={(period) => updateComp({ period: period as CompPeriod })}
+                      placeholder="Period"
+                      searchPlaceholder="Search…"
+                    />
+                  </Field>
+                </FieldGroup>
+
+                <Field>
+                  <p className={cn("text-sm", compRangeInverted ? "text-destructive" : "text-muted-foreground")}>
+                    {compRangeInverted ? (
+                      <>“To” is lower than “From” — swap them so the range reads the right way round.</>
+                    ) : compPreview ? (
+                      <>
+                        Screened as <strong className="text-foreground">{compPreview}</strong>
+                      </>
+                    ) : (
+                      "No pay target set — compensation won't affect screening."
+                    )}
+                  </p>
+                  <FieldDescription>
+                    A posting that states pay below your floor is rejected outright. Most postings don't disclose
+                    pay at all — those always pass through to the AI judge.
+                  </FieldDescription>
+                </Field>
+              </FieldGroup>
+            </CardContent>
+
+            <CardFooter className="justify-between border-t">
+              <Button type="button" variant="outline" onClick={() => setIsEditing(false)}>
                 Cancel
-              </button>
-              <button type="submit" className="profile-btn-primary" disabled={saving || compRangeInverted}>
+              </Button>
+              <Button type="submit" disabled={saving || compRangeInverted}>
+                {saving && <Spinner />}
                 {saving ? "Saving…" : "Update Profile"}
-              </button>
-            </div>
-          </section>
+              </Button>
+            </CardFooter>
+          </Card>
         </form>
       )}
-    </div>
+    </Page>
   );
 }

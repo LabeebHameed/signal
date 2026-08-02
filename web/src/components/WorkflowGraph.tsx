@@ -17,6 +17,7 @@ import {
 } from "@xyflow/react";
 import { useEffect, useMemo, useRef } from "react";
 import "@xyflow/react/dist/style.css";
+import "./workflow.css";
 import type { Settings, WatchedPage } from "../api";
 
 /** Matched/filtered counts scoped to one source page, keyed by page id. */

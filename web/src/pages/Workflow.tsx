@@ -1,8 +1,13 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { ArrowLeftIcon } from "lucide-react";
+
 import { api, type WatchedPage } from "../api";
+import { PageHeader, WidePage } from "@/components/PageShell";
 import { WorkflowGraph, type FunnelCounts, type InspectorState, type SourceStats } from "../components/WorkflowGraph";
 import { WorkflowInspector } from "../components/WorkflowInspector";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 
 /** limit:1 — only .total is read, same count-only query pattern Dashboard.tsx
  * uses. Kept as separate small queries (not one combined endpoint) so each
@@ -110,18 +115,14 @@ export default function Workflow() {
   const sourceStats = useSourceStats(pages);
 
   return (
-    <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Workflow</h1>
-          <p className="page-subtitle">
-            How postings move through the pipeline — click a step to see exactly what passed, what failed, and why.
-          </p>
-        </div>
-      </header>
+    <WidePage>
+      <PageHeader
+        title="Workflow"
+        description="How postings move through the pipeline — click a step to see exactly what passed, what failed, and why."
+      />
 
-      <div className="workflow-split">
-        <section className="card wf-canvas-card">
+      <div className="grid w-full items-start gap-6 xl:grid-cols-[1fr_380px]">
+        <Card className="overflow-hidden py-0">
           <WorkflowGraph
             pages={pages}
             settings={settings}
@@ -130,16 +131,24 @@ export default function Workflow() {
             selected={selected}
             onSelect={setSelected}
           />
-        </section>
-        <aside className="card wf-sidebar">
-          {selected.kind !== "overview" && (
-            <button className="secondary wf-back" onClick={() => setSelected({ kind: "overview" })}>
-              ← Back to overview
-            </button>
-          )}
-          <WorkflowInspector state={selected} counts={counts} pages={pages} settings={settings} />
-        </aside>
+        </Card>
+        <Card className="xl:sticky xl:top-20">
+          <CardContent className="flex flex-col gap-3">
+            {selected.kind !== "overview" && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="self-start"
+                onClick={() => setSelected({ kind: "overview" })}
+              >
+                <ArrowLeftIcon />
+                Back to overview
+              </Button>
+            )}
+            <WorkflowInspector state={selected} counts={counts} pages={pages} settings={settings} />
+          </CardContent>
+        </Card>
       </div>
-    </div>
+    </WidePage>
   );
 }

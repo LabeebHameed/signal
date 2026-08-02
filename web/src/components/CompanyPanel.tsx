@@ -37,7 +37,11 @@ export function CompanyBadge({ posting }: { posting: Posting }) {
  */
 export function CompanyPanel({ posting }: { posting: Posting }) {
   if (posting.company_status === "pending") {
-    return <p className="company-panel muted">Researching this company — background appears on the next check…</p>;
+    return (
+      <p className="text-sm text-muted-foreground">
+        Researching this company — background appears on the next check…
+      </p>
+    );
   }
   const dossier = posting.companies?.dossier;
   if (!dossier) return null;
@@ -51,32 +55,46 @@ export function CompanyPanel({ posting }: { posting: Posting }) {
   ].filter(Boolean);
 
   return (
-    <div className="company-panel">
-      <p className="company-head">
-        <strong>{posting.companies?.display_name || dossier.name}</strong> <CompanyBadge posting={posting} />
+    <div className="mt-3 grid gap-2 rounded-xl bg-muted/40 p-4 text-sm">
+      <p className="flex flex-wrap items-center gap-2">
+        <strong className="font-medium">{posting.companies?.display_name || dossier.name}</strong>
+        <CompanyBadge posting={posting} />
         {dossier.website && (
-          <a href={dossier.website} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+          <a
+            href={dossier.website}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="text-primary underline-offset-4 hover:underline"
+          >
             {dossier.website.replace(/^https?:\/\//, "")}
           </a>
         )}
       </p>
       {posting.company_verdict?.decision === "warn" && posting.company_verdict.reason && (
-        <p className="company-warning">⚠️ {posting.company_verdict.reason}</p>
+        <p className="text-amber-500">⚠️ {posting.company_verdict.reason}</p>
       )}
-      {dossier.summary && <p>{dossier.summary}</p>}
-      {facts.length > 0 && <p className="muted">{facts.join(" · ")}</p>}
+      {dossier.summary && <p className="text-muted-foreground">{dossier.summary}</p>}
+      {facts.length > 0 && <p className="text-xs text-muted-foreground">{facts.join(" · ")}</p>}
       {dossier.flags.length > 0 && (
-        <ul className="company-flags">
+        <ul className="list-disc pl-4 text-amber-500">
           {dossier.flags.map((flag, i) => (
             <li key={i}>{flag}</li>
           ))}
         </ul>
       )}
       {dossier.sources.length > 0 && (
-        <p className="company-sources muted">
+        <p className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
           Sources:{" "}
           {dossier.sources.map((s, i) => (
-            <a key={i} href={s.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+            <a
+              key={i}
+              href={s.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="text-primary underline-offset-4 hover:underline"
+            >
               {s.title || hostnameOf(s.url)}
             </a>
           ))}

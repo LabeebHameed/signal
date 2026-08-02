@@ -1,43 +1,29 @@
-import { createContext, ReactNode, useCallback, useContext, useRef, useState } from "react";
+import { ReactNode } from "react";
+import { Toaster, toast as toastManager } from "@/components/ui/toast";
 
 type Tone = "success" | "error";
-interface ToastMessage {
-  id: number;
-  text: string;
-  tone: Tone;
-}
+
 interface ToastContextValue {
   show: (text: string, tone?: Tone) => void;
 }
 
-const ToastContext = createContext<ToastContextValue | null>(null);
-
+/**
+ * The app's single notification surface, backed by the Base UI toast
+ * primitive. `useToast().show(text, tone)` is kept as the call signature the
+ * rest of the app already speaks — only the rendering moved.
+ */
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  const idRef = useRef(0);
-
-  const show = useCallback((text: string, tone: Tone = "success") => {
-    const id = ++idRef.current;
-    setToasts((prev) => [...prev, { id, text, tone }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
-  }, []);
-
-  return (
-    <ToastContext.Provider value={{ show }}>
-      {children}
-      <div className="toast-stack">
-        {toasts.map((t) => (
-          <div key={t.id} className={`toast toast-${t.tone}`}>
-            {t.text}
-          </div>
-        ))}
-      </div>
-    </ToastContext.Provider>
-  );
+  return <Toaster>{children}</Toaster>;
 }
 
 export function useToast(): ToastContextValue {
-  const ctx = useContext(ToastContext);
-  if (!ctx) throw new Error("useToast must be used within ToastProvider");
-  return ctx;
+  return {
+    show: (text: string, tone: Tone = "success") => {
+      toastManager.add({
+        title: tone === "error" ? "Something went wrong" : "Done",
+        description: text,
+        type: tone,
+      });
+    },
+  };
 }

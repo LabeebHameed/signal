@@ -4,6 +4,7 @@ import { api, Settings, WatchedPage } from "../api";
 import { timeAgo } from "../lib/format";
 import type { FunnelCounts, InspectorState } from "./WorkflowGraph";
 import { PostingRoster } from "./PostingRoster";
+import { Button } from "@/components/ui/button";
 
 const ROSTER_LIMIT = 20;
 
@@ -17,15 +18,16 @@ function Tabs<T extends string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="wf-tabs">
+    <div className="flex flex-wrap gap-1.5">
       {options.map((o) => (
-        <button
+        <Button
           key={o.value}
-          className={o.value === value ? "wf-tab" : "wf-tab secondary"}
+          size="sm"
+          variant={o.value === value ? "default" : "outline"}
           onClick={() => onChange(o.value)}
         >
           {o.label}
-        </button>
+        </Button>
       ))}
     </div>
   );
@@ -51,16 +53,14 @@ function FunnelOverview({ counts }: { counts: FunnelCounts }) {
   ];
   return (
     <>
-      <div className="card-header">
-        <h2>Funnel overview</h2>
-      </div>
-      <p className="hint">Click any node in the canvas to see exactly what happened at that step and why.</p>
-      <div className="wf-funnel">
+      <h2 className="font-heading text-base font-medium">Funnel overview</h2>
+      <p className="text-sm text-muted-foreground">Click any node in the canvas to see exactly what happened at that step and why.</p>
+      <div className="wf-funnel flex flex-col gap-3">
         {rows.map((r) => (
-          <div className="wf-funnel-row" key={r.label}>
-            <div className="wf-funnel-row-top">
+          <div key={r.label}>
+            <div className="mb-1.5 flex justify-between text-sm">
               <span>{r.label}</span>
-              <span className="wf-funnel-value">{r.value}</span>
+              <span className="font-medium tabular-nums">{r.value}</span>
             </div>
             <div className="wf-funnel-bar">
               <div
@@ -71,11 +71,11 @@ function FunnelOverview({ counts }: { counts: FunnelCounts }) {
           </div>
         ))}
       </div>
-      <div className="wf-legend">
-        <div className="wf-legend-title">Legend</div>
+      <div className="wf-legend border-t pt-4">
+        <div className="mb-2.5 text-xs tracking-wide text-muted-foreground uppercase">Legend</div>
         {LEGEND.map((l) => (
-          <div className="wf-legend-row" key={l.label}>
-            <span className={`wf-legend-dot wf-legend-dot-${l.color}`} />
+          <div className="mb-2 flex items-center gap-2 text-sm" key={l.label}>
+            <span className={`size-2.5 shrink-0 rounded-full wf-legend-dot-${l.color}`} />
             {l.label}
           </div>
         ))}
@@ -129,11 +129,9 @@ function SourcePanel({ pageId, label, pages }: { pageId: string; label: string; 
   });
   return (
     <>
-      <div className="card-header">
-        <h2>{label}</h2>
-      </div>
+      <h2 className="font-heading text-base font-medium">{label}</h2>
       {page && (
-        <p className="hint">
+        <p className="text-sm text-muted-foreground">
           {page.last_error
             ? `Error: ${page.last_error}`
             : page.first_crawl_done
@@ -188,10 +186,8 @@ function JudgePanel({ counts }: { counts: FunnelCounts }) {
 
   return (
     <>
-      <div className="card-header">
-        <h2>AI Judge</h2>
-      </div>
-      <p className="hint">
+      <h2 className="font-heading text-base font-medium">AI Judge</h2>
+      <p className="text-sm text-muted-foreground">
         The LLM's verdict on every posting that passed the keyword filter — the exact stored reason
         (off-target title, or the judge's summary), never a fresh explanation.
       </p>
@@ -230,20 +226,18 @@ function KeywordFilterPanel({ counts, settings }: { counts: FunnelCounts; settin
   });
   return (
     <>
-      <div className="card-header">
-        <h2>Keyword Filter</h2>
-      </div>
+      <h2 className="font-heading text-base font-medium">Keyword Filter</h2>
       {!active ? (
-        <p className="hint">
+        <p className="text-sm text-muted-foreground">
           This gate is off — the profile declares no title keywords, locations, or pay floor. Set any of them on the
           Profile page to reject postings before they ever reach the AI judge.
         </p>
       ) : (
         <>
-          <p className="hint">
+          <p className="text-sm text-muted-foreground">
             Runs before the AI judge, for every source. Everything it rejects is deterministic — no LLM call spent:
           </p>
-          <ul className="hint">
+          <ul className="text-sm text-muted-foreground">
             {keywords !== "" && (
               <li>
                 Title contains none of <strong>{keywords}</strong>. This is the hard backstop for cases the judge
@@ -291,17 +285,15 @@ function CompanyQualifyPanel({ counts, companyActive }: { counts: FunnelCounts; 
   });
   return (
     <>
-      <div className="card-header">
-        <h2>Company Qualify</h2>
-      </div>
+      <h2 className="font-heading text-base font-medium">Company Qualify</h2>
       {!companyActive ? (
-        <p className="hint">
+        <p className="text-sm text-muted-foreground">
           This layer is off. Enable it (and add a Tavily key) in Settings to research matched companies before
           notifying — it never blocks a match, only adds a caution badge.
         </p>
       ) : (
         <>
-          <p className="hint">Never blocks a match — the company layer's caution for each matched posting.</p>
+          <p className="text-sm text-muted-foreground">Never blocks a match — the company layer's caution for each matched posting.</p>
           <Tabs
             value={tab}
             onChange={setTab}
@@ -325,10 +317,8 @@ function DuplicatesPanel({ counts }: { counts: FunnelCounts }) {
   });
   return (
     <>
-      <div className="card-header">
-        <h2>Duplicate Checker</h2>
-      </div>
-      <p className="hint">
+      <h2 className="font-heading text-base font-medium">Duplicate Checker</h2>
+      <p className="text-sm text-muted-foreground">
         Right after a posting matches, it's checked against everything already notified from another source in the
         last 14 days — before spending any company research on it. A recognized repost is suppressed here, never
         sent twice.
@@ -354,10 +344,8 @@ function NotifiedPanel({ counts }: { counts: FunnelCounts }) {
   });
   return (
     <>
-      <div className="card-header">
-        <h2>Notify</h2>
-      </div>
-      <p className="hint">Sent = actually delivered to Telegram. Queued = matched, cleared, waiting on the next poll run to send.</p>
+      <h2 className="font-heading text-base font-medium">Notify</h2>
+      <p className="text-sm text-muted-foreground">Sent = actually delivered to Telegram. Queued = matched, cleared, waiting on the next poll run to send.</p>
       <Tabs
         value={tab}
         onChange={setTab}
@@ -383,10 +371,8 @@ function FilteredPanel({ counts }: { counts: FunnelCounts }) {
   });
   return (
     <>
-      <div className="card-header">
-        <h2>Filtered &amp; Archived</h2>
-      </div>
-      <p className="hint">Postings rejected by the keyword filter or the AI judge.</p>
+      <h2 className="font-heading text-base font-medium">Filtered &amp; Archived</h2>
+      <p className="text-sm text-muted-foreground">Postings rejected by the keyword filter or the AI judge.</p>
       <PostingRoster
         items={data?.items ?? []}
         total={counts.filtered}

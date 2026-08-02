@@ -3,7 +3,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import "./styles.css";
+import "./index.css";
 
 // Cached in-memory per query key (pages/postings/settings) so switching
 // routes shows the last-known data instantly instead of a loading spinner;
